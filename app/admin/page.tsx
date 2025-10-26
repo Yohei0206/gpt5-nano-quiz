@@ -125,12 +125,14 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [genGenre, setGenGenre] = useState<string>("雑学");
+  const [genGenre, setGenGenre] = useState<string>("trivia");
   const [genCount, setGenCount] = useState<number>(8);
   const [genDifficulty, setGenDifficulty] = useState<
     "easy" | "normal" | "hard" | "mixed"
   >("normal");
   const [generating, setGenerating] = useState(false);
+  const [parallelRunning, setParallelRunning] = useState(false);
+  const [parallelCount, setParallelCount] = useState<number>(3);
   const [preview, setPreview] = useState<any[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -315,6 +317,49 @@ export default function AdminPage() {
       setError((e as Error).message);
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function generateInParallel() {
+    if (parallelCount < 1) return;
+    setParallelRunning(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const payload = {
+        genre: genGenre,
+        count: genCount,
+        difficulty: genDifficulty,
+        language: "ja",
+      } as const;
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
+          ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN as string }
+          : {}),
+      };
+      const jobs = Array.from({ length: parallelCount }, async () => {
+        const r = await fetch("/api/admin/generate-batch", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+        return data as { inserted?: number };
+      });
+      const results = await Promise.allSettled(jobs);
+      const ok = results.filter((x) => x.status === "fulfilled") as PromiseFulfilledResult<{ inserted?: number }>[];
+      const ng = results.filter((x) => x.status === "rejected") as PromiseRejectedResult[];
+      const insertedTotal = ok.reduce((sum, r) => sum + (r.value?.inserted ?? 0), 0);
+      setInfo(`並列実行完了: 成功 ${ok.length} / ${results.length}、保存 ${insertedTotal} 件`);
+      if (ng.length) setError(`失敗 ${ng.length} 件（コンソール参照）`);
+      try { console.log("[admin] parallel results", results); } catch {}
+      await loadPreview();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setParallelRunning(false);
     }
   }
 
@@ -573,7 +618,7 @@ export default function AdminPage() {
         <div className="font-semibold">
           ジャンル指定でGPT生成（直接Supabaseへ保存）
         </div>
-        <div className="grid sm:grid-cols-3 gap-4">
+        <div className="grid sm:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm mb-1">ジャンル（固定）</label>
             <select
@@ -616,6 +661,21 @@ export default function AdminPage() {
               <option value="mixed">mixed</option>
             </select>
           </div>
+          <div>
+            <label className="block text-sm mb-1">並列数</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              value={parallelCount}
+              onChange={(e) =>
+                setParallelCount(
+                  Math.max(1, Math.min(10, Number(e.target.value) || 1))
+                )
+              }
+            />
+          </div>
         </div>
         <div className="flex gap-3 justify-end">
           <button
@@ -624,6 +684,13 @@ export default function AdminPage() {
             disabled={generating}
           >
             {generating ? "生成中..." : "生成して保存"}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={generateInParallel}
+            disabled={parallelRunning}
+          >
+            {parallelRunning ? "並列中..." : "並列で生成・保存"}
           </button>
           <button
             className="btn btn-ghost"

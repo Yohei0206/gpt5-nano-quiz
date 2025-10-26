@@ -1,9 +1,8 @@
-﻿import { NextRequest } from "next/server";
+import { NextRequest } from "next/server";
 import { z } from "zod";
 import { serverSupabaseService } from "@/lib/supabase";
-import { text } from "stream/consumers";
 
-export const runtime = "nodejs"; // Service Role 菴ｿ逕ｨ
+export const runtime = "nodejs"; // Service Role 使用
 
 const ReqSchema = z.object({
   genre: z.string().min(1),
@@ -12,7 +11,7 @@ const ReqSchema = z.object({
   language: z.enum(["ja", "en"]).default("ja"),
 });
 
-// 繝｢繝・Ν蜃ｺ蜉帙・邱ｩ繧√↓蜿励￠縺ｦ縺九ｉ豁｣隕丞喧
+// モデル出力を緩めに受けてから正規化
 const RawItem = z.object({
   id: z.string().optional(),
   prompt: z.string().optional(),
@@ -50,21 +49,26 @@ function extractJsonArray(text: string): string {
   return "[]";
 }
 
-// Responses API 縺ｮ蜃ｺ蜉帙°繧・json 繧ゅ＠縺上・ text 繧定ｵｰ譟ｻ縺励※驟榊・繧ゅ＠縺上・ {items: [...]} 繧貞叙繧雁・縺・function parseFromAny(j: any): any[] {
+// Responses API の出力から配列、または { items: [...] } を抽出
+function parseFromAny(j: any): any[] {
   try {
     const outputs = Array.isArray(j?.output) ? j.output : [];
-    // 1) content 縺ｮ json 繧貞━蜈・    for (const entry of outputs) {
+    // 1) content の json を優先
+    for (const entry of outputs) {
       const content = (entry as any)?.content;
       if (Array.isArray(content)) {
         for (const c of content) {
           if (c && c.type === "json" && c.json) {
-            const candidate = typeof c.json === "object" ? (c.json.items ?? c.json) : c.json;
-            try { return Array.isArray(candidate) ? candidate : []; } catch {}
+            const candidate =
+              typeof c.json === "object" ? c.json.items ?? c.json : c.json;
+            try {
+              return Array.isArray(candidate) ? candidate : [];
+            } catch {}
           }
         }
       }
     }
-    // 2) content 縺ｮ output_text 竊・縺ｾ縺壼・譁・JSON.parse縲√ム繝｡縺ｪ繧蛾・蛻玲歓蜃ｺ
+    // 2) output_text をまず JSON.parse、ダメなら配列抽出
     for (const entry of outputs) {
       const content = (entry as any)?.content;
       if (Array.isArray(content)) {
@@ -83,7 +87,7 @@ function extractJsonArray(text: string): string {
         }
       }
     }
-    // 3) 譛蠕後↓ j.output_text 繧定ｦ九ｋ
+    // 3) j.output_text を最後に確認
     if (typeof j?.output_text === "string") {
       try {
         const obj = JSON.parse(j.output_text);
@@ -124,20 +128,20 @@ export async function POST(req: NextRequest) {
   if (!apiKey) return json({ error: "Missing OpenAI API key" }, 500);
 
   const system = [
-    "縺ゅ↑縺溘・謨呵ご逧・〒螳牙・縺ｪ繧ｯ繧､繧ｺ菴懈・繧｢繧ｷ繧ｹ繧ｿ繝ｳ繝医〒縺吶・,
-    "- 蜃ｺ蜉帙・JSON驟榊・縺ｮ縺ｿ縲ょ燕蠕後↓隱ｬ譏弱ｄ菴呵ｨ医↑譁・ｭ励・繧ｳ繝ｼ繝峨ヵ繧ｧ繝ｳ繧ｹ繧貞性繧√↑縺・・,
-    "- 蜷・ｦ∫ｴ縺ｯ {id,prompt,choices(4),answerIndex,explanation?,category,subgenre?,difficulty,source}縲・,
-    "- choices縺ｯ驥崎､・↑縺励・螯･蠖薙↑蛟呵｣・縺､縲・,
-    "- 荳埼←蛻・・蟾ｮ蛻･逧・｡ｨ迴ｾ縲∝現逋・豕募ｾ句勧險縺ｯ遖∵ｭ｢縲・,
+    "あなたは安全なクイズ作成アシスタントです。",
+    "- 出力はJSON配列のみ。前後の説明やコードフェンスは禁止。",
+    "- 要素は {id,prompt,choices(4),answerIndex,explanation?,category,subgenre?,difficulty,source}。",
+    "- choicesは重複なく妥当な選択肢を4つ。",
+    "- 不適切表現や医療・法律助言は禁止。",
   ].join("\n");
 
   const difficulty = body.difficulty === "mixed" ? "mixed" : body.difficulty;
   const user = [
-    `繧ｸ繝｣繝ｳ繝ｫ/Category: ${body.genre}`,
-    `髮｣譏灘ｺｦ/Difficulty: ${difficulty}`,
-    `險隱・Language: ${body.language}`,
-    `蜃ｺ鬘梧焚/Count: ${body.count}`,
-    "驥崎ｦ・ 蠢・★ Count 莉ｶ縺ｮ隕∫ｴ繧呈戟縺､ JSON 驟榊・縺ｮ縺ｿ繧定ｿ斐☆縺薙→縲らｩｺ驟榊・繧・ｸ崎ｶｳ縺ｯ遖∵ｭ｢縲・,
+    `ジャンル/Category: ${body.genre}`,
+    `難易度/Difficulty: ${difficulty}`,
+    `言語/Language: ${body.language}`,
+    `出題数/Count: ${body.count}`,
+    "重要: 必ず Count 件の要素を持つ JSON 配列のみを返すこと。空配列や不足は禁止。",
   ].join("\n");
 
   const url = "https://api.openai.com/v1/responses";
@@ -217,8 +221,14 @@ export async function POST(req: NextRequest) {
       null;
     const text = await r.text();
     try {
-      console.log("[generate-batch] fetch response", { status: r.status, requestId: reqId });
-      console.log("[generate-batch] raw response (first 2000 chars):\n", text.slice(0, 2000));
+      console.log("[generate-batch] fetch response", {
+        status: r.status,
+        requestId: reqId,
+      });
+      console.log(
+        "[generate-batch] raw response (first 2000 chars):\n",
+        text.slice(0, 2000)
+      );
     } catch {}
     if (!r.ok) {
       const e = new Error(`OpenAI error ${r.status}: ${text}`) as any;
@@ -226,7 +236,9 @@ export async function POST(req: NextRequest) {
       throw e;
     }
     let json: any = null;
-    try { json = JSON.parse(text); } catch {}
+    try {
+      json = JSON.parse(text);
+    } catch {}
     return { json, requestId: reqId, raw: text } as any;
   }
 
@@ -261,7 +273,6 @@ export async function POST(req: NextRequest) {
       try {
         items = RawArr.parse(JSON.parse(text1));
       } catch {}
-      // Fallback: try full JSON object with { items: [...] }
       if (!Array.isArray(items) || items.length === 0) {
         try {
           const full1 =
@@ -283,7 +294,7 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(items) || items.length === 0) {
       const res2 = await call({
         ...payload,
-        input: `${system}\n\n${user}\n蜃ｺ蜉帙・蠢・★JSON驟榊・縺ｮ縺ｿ縲ゅさ繝ｼ繝峨ヵ繧ｧ繝ｳ繧ｹ繧・ｪｬ譏弱・遖∵ｭ｢縲Ａ,
+        input: `${system}\n\n${user}\n出力は必ずJSON配列のみ。コードフェンスや説明は禁止。`,
         text: { verbosity: "low", format: buildJsonSchema() },
       });
       const j2 = (res2 as any).json;
@@ -325,9 +336,7 @@ export async function POST(req: NextRequest) {
 
     // Schema-hint retry
     if (!Array.isArray(items) || items.length === 0) {
-      const schemaHint = `莉･荳九・蠖｢蠑上・JSON驟榊・縺ｮ縺ｿ縺ｧ霑斐＠縺ｦ縺上□縺輔＞縲ゆｾ・\n[
-  {"id":"q1","prompt":"...","choices":["A","B","C","D"],"answerIndex":1,"explanation":"...","category":"${body.genre}","difficulty":"normal","source":"generated:nano"}
-]`;
+      const schemaHint = `以下の形式でJSON配列のみで返してください。例\n[\n  {"id":"q1","prompt":"...","choices":["A","B","C","D"],"answerIndex":1,"explanation":"...","category":"${body.genre}","difficulty":"normal","source":"generated:nano"}\n]`;
       const res3 = await call({
         ...payload,
         input: `${system}\n\n${user}\n${schemaHint}`,
@@ -371,32 +380,45 @@ export async function POST(req: NextRequest) {
     }
 
     if (!Array.isArray(items) || items.length === 0) {
-      return json({
-        error: "逕滓・邨先棡縺檎ｩｺ縺ｧ縺励◆縲ゅず繝｣繝ｳ繝ｫ繧・ｻｶ謨ｰ繧定ｦ狗峩縺励※蜀崎ｩｦ陦後＠縺ｦ縺上□縺輔＞縲・,
-        attempted: true,
-      }, 422);
+      return json(
+        {
+          error:
+            "生成結果が空でした。ジャンルや件数を見直して再試行してください。",
+          attempted: true,
+        },
+        422
+      );
     }
 
-    // 霑ｽ蜉隧ｦ陦・ 荳崎ｶｳ蛻・′縺ゅｋ蝣ｴ蜷医・谿九ｊ莉ｶ謨ｰ縺ｮ縺ｿ蜀咲函謌舌＠縺ｦ陬懷ｮ鯉ｼ域怙螟ｧ1蝗橸ｼ・    if (Array.isArray(items) && items.length < body.count) {
+    // 不足分のみ追加生成（最大1回）
+    if (Array.isArray(items) && items.length < body.count) {
       const remaining = Math.max(0, body.count - items.length);
       if (remaining > 0) {
         try {
           const resExtra = await call({
             ...payload,
-            input: `${system}\n\n繧ｸ繝｣繝ｳ繝ｫ/Category: ${body.genre}\n髮｣譏灘ｺｦ/Difficulty: ${difficulty}\n險隱・Language: ${body.language}\n蜃ｺ鬘梧焚/Count: ${remaining}\n蜷・・岼縺ｯ邁｡貎斐↓・・rompt縺ｯ200蟄嶺ｻ･蜀・‘xplanation縺ｯ100蟄嶺ｻ･蜀・ｼ峨・n驥崎ｦ・ 蠢・★ Count 莉ｶ縺ｮ隕∫ｴ繧呈戟縺､ JSON 驟榊・縺ｮ縺ｿ繧定ｿ斐☆縺薙→縲Ａ,
+            input: `${system}\n\nジャンル/Category: ${body.genre}\n難易度/Difficulty: ${difficulty}\n言語/Language: ${body.language}\n出題数/Count: ${remaining}\n・説明は簡潔に。\n・promptは200字以内、explanationは100字以内。\n・重要: 必ず Count 件の要素を持つ JSON 配列のみを返すこと。`,
             text: { verbosity: "low", format: buildJsonSchema() },
           });
           const jExtra = (resExtra as any).json;
           let extra: any[] = parseFromAny(jExtra) as any[];
           const f = jExtra?.output?.[0]?.content?.[0];
           if (f && f.type === "json" && f.json) {
-            const cand = (typeof f.json === 'object') ? (f.json.items ?? f.json) : f.json;
-            try { extra = RawArr.parse(cand) as any[]; } catch {}
+            const cand =
+              typeof f.json === "object" ? f.json.items ?? f.json : f.json;
+            try {
+              extra = RawArr.parse(cand) as any[];
+            } catch {}
           }
           if (!Array.isArray(extra) || extra.length === 0) {
-            let t = jExtra?.output_text ?? jExtra?.output?.[0]?.content?.[0]?.text ?? "[]";
+            let t =
+              jExtra?.output_text ??
+              jExtra?.output?.[0]?.content?.[0]?.text ??
+              "[]";
             t = extractJsonArray(t);
-            try { extra = RawArr.parse(JSON.parse(t)) as any[]; } catch {}
+            try {
+              extra = RawArr.parse(JSON.parse(t)) as any[];
+            } catch {}
           }
           if (Array.isArray(extra) && extra.length > 0) {
             items = [...items, ...extra].slice(0, body.count);
@@ -405,7 +427,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 豁｣隕丞喧
+    // 正規化
     const norm = (s: string) => s.trim();
     function toIndex(q: any): number {
       if (typeof q.answerIndex === "number") return q.answerIndex;
@@ -431,8 +453,8 @@ export async function POST(req: NextRequest) {
     }
     function toDifficulty(d?: string): "easy" | "normal" | "hard" {
       const s = (d ?? "").toLowerCase();
-      if (s.includes("easy") || s.includes("蛻晉ｴ・)) return "easy";
-      if (s.includes("hard") || s.includes("荳顔ｴ・) || s.includes("difficult"))
+      if (s.includes("easy") || s.includes("初級")) return "easy";
+      if (s.includes("hard") || s.includes("上級") || s.includes("difficult"))
         return "hard";
       return "normal";
     }
@@ -460,93 +482,116 @@ export async function POST(req: NextRequest) {
       };
     });
 
-        // Verify each question via LLM (A-方式). Only keep passed ones.
+    // 検証（Wikipedia優先→LLM自己チェック）
     async function fetchWikiEvidence(query: string, lang: string = "ja") {
-  try {
-    const searchUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&utf8=&format=json&srlimit=3&origin=*`;
-    const sr = await fetch(searchUrl);
-    const sj = await sr.json();
-    const hits = sj?.query?.search ?? [];
-    const texts: string[] = [];
-    const urls: string[] = [];
-    for (const h of hits.slice(0,2)) {
-      const title = h?.title;
-      if (!title) continue;
-      const sumUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
-      const rs = await fetch(sumUrl);
-      if (!rs.ok) continue;
-      const js = await rs.json();
-      const extract = js?.extract || js?.description || '';
-      const page = js?.content_urls?.desktop?.page || js?.url || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title)}`;
-      if (extract) texts.push(extract);
-      if (page) urls.push(page);
+      try {
+        const searchUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+          query
+        )}&utf8=&format=json&srlimit=3&origin=*`;
+        const sr = await fetch(searchUrl);
+        const sj = await sr.json();
+        const hits = sj?.query?.search ?? [];
+        const texts: string[] = [];
+        const urls: string[] = [];
+        for (const h of hits.slice(0, 2)) {
+          const title = h?.title;
+          if (!title) continue;
+          const sumUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
+            title
+          )}`;
+          const rs = await fetch(sumUrl);
+          if (!rs.ok) continue;
+          const js = await rs.json();
+          const extract = js?.extract || js?.description || "";
+          const page =
+            js?.content_urls?.desktop?.page ||
+            js?.url ||
+            `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+          if (extract) texts.push(extract);
+          if (page) urls.push(page);
+        }
+        const text = texts.join("\n\n");
+        return { text, urls };
+      } catch {
+        return { text: "", urls: [] };
+      }
     }
-    const text = texts.join('\n\n');
-    return { text, urls };
-  } catch {
-    return { text: '', urls: [] };
-  }
-}
 
-async function verifyWithSources(q: any) {
-  // Try Wikipedia-based verification first
-  const ev = await fetchWikiEvidence(q.prompt);
-  if (ev.text && ev.text.length > 0) {
-    const urlV = "https://api.openai.com/v1/responses";
-    const payloadV: any = {
-      model: "gpt-5-nano",
-      input: `以下のエビデンスの範囲で、クイズの正解が事実として支持されるか判定してください。エビデンスにない推測は不可。\n`+
-             `【クイズ】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(', ')}\n正解インデックス: ${q.answerIndex}\n`+
-             `【エビデンス（Wikipedia要約）】\n${ev.text}\n`+
-             `出力はJSONのみ: {\"pass\": boolean, \"reason\": string, \"source_url\"?: string}`,
-      max_output_tokens: 400,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "verdict",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["pass","reason"],
-            properties: {
-              pass: { type: "boolean" },
-              reason: { type: "string" },
-              source_url: { type: "string" }
+    async function verifyWithSources(q: any) {
+      const ev = await fetchWikiEvidence(q.prompt);
+      if (ev.text && ev.text.length > 0) {
+        const urlV = "https://api.openai.com/v1/responses";
+        const payloadV: any = {
+          model: "gpt-5-nano",
+          input:
+            `以下のエビデンスの範囲で、クイズの正解が事実として支持されるか判定してください。エビデンスにない推測は不可。\n` +
+            `【クイズ】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(
+              ", "
+            )}\n正解インデックス: ${q.answerIndex}\n` +
+            `【エビデンス（Wikipedia要約）】\n${ev.text}\n` +
+            `出力はJSONのみ: {\"pass\": boolean, \"reason\": string, \"source_url\"?: string}`,
+          max_output_tokens: 400,
+          text: {
+            verbosity: "low",
+            format: {
+              type: "json_schema",
+              name: "verdict",
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["pass", "reason"],
+                properties: {
+                  pass: { type: "boolean" },
+                  reason: { type: "string" },
+                  source_url: { type: "string" },
+                },
+              },
+            },
+          },
+        };
+        const r = await fetch(urlV, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(payloadV),
+        });
+        try {
+          const t = await r.text();
+          const j = JSON.parse(t);
+          const out = Array.isArray(j.output) ? j.output : [];
+          for (const e of out) {
+            const c = e?.content?.[0];
+            if (c?.type === "json" && c.json) {
+              if (!c.json.source_url && ev.urls?.length)
+                c.json.source_url = ev.urls[0];
+              return c.json;
+            }
+            if (c?.type === "output_text" && typeof c.text === "string") {
+              try {
+                const v = JSON.parse(c.text);
+                if (!v.source_url && ev.urls?.length) v.source_url = ev.urls[0];
+                return v;
+              } catch {}
             }
           }
-        }
+        } catch {}
       }
-    };
-    const r = await fetch(urlV, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` }, body: JSON.stringify(payloadV) });
-    try {
-      const t = await r.text();
-      const j = JSON.parse(t);
-      const out = Array.isArray(j.output) ? j.output : [];
-      for (const e of out) {
-        const c = e?.content?.[0];
-        if (c?.type === 'json' && c.json) {
-          if (!c.json.source_url && ev.urls?.length) c.json.source_url = ev.urls[0];
-          return c.json;
-        }
-        if (c?.type === 'output_text' && typeof c.text === 'string') {
-          try { const v = JSON.parse(c.text); if (!v.source_url && ev.urls?.length) v.source_url = ev.urls[0]; return v; } catch {}
-        }
-      }
-    } catch {}
-  }
-  // Fallback to LLM self-check (A方式)
-  return await verifyQuestion(q);
-}async function verifyQuestion(q: any) {
+      return await verifyQuestion(q);
+    }
+
+    async function verifyQuestion(q: any) {
       const urlV = "https://api.openai.com/v1/responses";
       const payloadV: any = {
         model: "gpt-5-nano",
-        input: `次のクイズ項目が事実に基づき正しいか検証してください。\n` +
-               `問題: ${q.prompt}\n` +
-               `選択肢: ${q.choices.join(', ')}\n` +
-               `正解インデックス: ${q.answerIndex}\n` +
-               `カテゴリ: ${q.category}\n` +
-               `出力はJSONのみ: {\"pass\": boolean, \"reason\": string, \"source_url\"?: string}`,
+        input:
+          `次のクイズ項目が事実に基づき正しいか検証してください。\n` +
+          `問題: ${q.prompt}\n` +
+          `選択肢: ${q.choices.join(", ")}\n` +
+          `正解インデックス: ${q.answerIndex}\n` +
+          `カテゴリ: ${q.category}\n` +
+          `出力はJSONのみ: {\"pass\": boolean, \"reason\": string, \"source_url\"?: string}`,
         max_output_tokens: 400,
         text: {
           verbosity: "low",
@@ -556,20 +601,23 @@ async function verifyWithSources(q: any) {
             schema: {
               type: "object",
               additionalProperties: false,
-              required: ["pass","reason"],
+              required: ["pass", "reason"],
               properties: {
                 pass: { type: "boolean" },
                 reason: { type: "string" },
-                source_url: { type: "string" }
-              }
-            }
-          }
-        }
+                source_url: { type: "string" },
+              },
+            },
+          },
+        },
       };
       const r = await fetch(urlV, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify(payloadV)
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payloadV),
       });
       const t = await r.text();
       try {
@@ -577,9 +625,11 @@ async function verifyWithSources(q: any) {
         const out = Array.isArray(j.output) ? j.output : [];
         for (const e of out) {
           const c = e?.content?.[0];
-          if (c?.type === 'json' && c.json) return c.json;
-          if (c?.type === 'output_text' && typeof c.text === 'string') {
-            try { return JSON.parse(c.text); } catch {}
+          if (c?.type === "json" && c.json) return c.json;
+          if (c?.type === "output_text" && typeof c.text === "string") {
+            try {
+              return JSON.parse(c.text);
+            } catch {}
           }
         }
       } catch {}
@@ -592,14 +642,21 @@ async function verifyWithSources(q: any) {
       try {
         const v = await verifyWithSources(q);
         if (v && v.pass) {
-          verified.push({ ...q, verified: true, verified_at: new Date().toISOString(), verify_notes: v.reason, source_url: v.source_url ?? null });
+          verified.push({
+            ...q,
+            verified: true,
+            verified_at: new Date().toISOString(),
+            verify_notes: v.reason,
+            source_url: v.source_url ?? null,
+          });
         } else {
-          rejected.push({ id: q.id, reason: v?.reason ?? '検証失敗' });
+          rejected.push({ id: q.id, reason: v?.reason ?? "検証失敗" });
         }
       } catch {
-        rejected.push({ id: q.id, reason: '検証エラー' });
+        rejected.push({ id: q.id, reason: "検証エラー" });
       }
-    }\nif (dryRun) {
+    }
+    if (dryRun) {
       try {
         console.log(
           "[generate-batch] dry-run items preview:",
@@ -610,16 +667,18 @@ async function verifyWithSources(q: any) {
       } catch {}
       return json(
         {
-          items: verified, rejected: rejected,
+          items: verified,
+          rejected: rejected,
           ...(debugFlag ? { requestId: (res1 as any).requestId } : {}),
         },
         200
       );
     }
 
-    // 菫晏ｭ・    const supabase = serverSupabaseService();
-    const rows = out.map((q) => ({
-      // id 縺ｯ騾√ｉ縺壹．B縺ｮ閾ｪ蜍墓治逡ｪ縺ｫ莉ｻ縺帙ｋ
+    // 保存
+    const supabase = serverSupabaseService();
+    const rows = verified.map((q) => ({
+      // id は送らず、DBの自動採番に任せる
       prompt: q.prompt,
       choices: q.choices,
       answer_index: q.answerIndex,
@@ -642,7 +701,6 @@ async function verifyWithSources(q: any) {
       } catch {}
       return json({ error: error.message }, 500);
     }
-
     try {
       console.log("[generate-batch] upsert success", {
         inserted: data?.length ?? 0,
@@ -664,7 +722,3 @@ async function verifyWithSources(q: any) {
     );
   }
 }
-
-
-
-

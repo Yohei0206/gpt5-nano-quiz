@@ -43,6 +43,47 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // カテゴリーをスラッグへ正規化（FK: categories.slug）
+  const CATEGORY_SLUGS = new Set([
+    "general",
+    "science",
+    "entertainment",
+    "trivia",
+    "japan",
+    "world",
+    "society",
+  ]);
+  function normalizeCategory(input: string): string {
+    const raw = (input || "").trim();
+    const lower = raw.toLowerCase();
+    if (CATEGORY_SLUGS.has(lower)) return lower;
+    const alias: Record<string, string> = {
+      "一般教養": "general",
+      "理系・科学": "science",
+      "理系": "science",
+      "文化・エンタメ": "entertainment",
+      "エンタメ": "entertainment",
+      "雑学": "trivia",
+      "日本": "japan",
+      "世界": "world",
+      "時事・社会": "society",
+      "時事": "society",
+      "アニメ・ゲーム・漫画": "entertainment",
+      "アニメ": "entertainment",
+      "ゲーム": "entertainment",
+      "漫画": "entertainment",
+    };
+    if (raw in alias) return alias[raw];
+    if (lower.includes("entertain")) return "entertainment";
+    if (lower.includes("general")) return "general";
+    if (lower.includes("science") || raw.includes("理系") || raw.includes("科学")) return "science";
+    if (lower.includes("trivia") || raw.includes("雑学")) return "trivia";
+    if (lower.includes("japan") || raw.includes("日本")) return "japan";
+    if (lower.includes("world") || raw.includes("世界")) return "world";
+    if (lower.includes("society") || raw.includes("時事") || raw.includes("社会")) return "society";
+    return "trivia";
+  }
+
   const supabase = serverSupabaseService();
   const rows = body.items.map((q) => ({
     // id は送らず、DB の identity に任せる
@@ -50,7 +91,7 @@ export async function POST(req: NextRequest) {
     choices: q.choices,
     answer_index: q.answerIndex,
     explanation: q.explanation ?? null,
-    category: q.category,
+    category: normalizeCategory(q.category),
     subgenre: q.subgenre ?? null,
     difficulty: q.difficulty,
     source: q.source,
