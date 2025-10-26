@@ -1,20 +1,10 @@
 ﻿"use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Select from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { useQuiz } from "@/lib/store";
 import type { Difficulty } from "@/lib/types";
-
-const CATEGORIES: { slug: string; label: string }[] = [
-  { slug: "", label: "未指定" },
-  { slug: "general", label: "一般教養" },
-  { slug: "science", label: "理系・科学" },
-  { slug: "entertainment", label: "文化・エンタメ" },
-  { slug: "otaku", label: "アニメ・ゲーム・漫画" },
-  { slug: "trivia", label: "雑学" },
-  { slug: "japan", label: "日本" },
-  { slug: "world", label: "世界" },
-  { slug: "society", label: "時事・社会" },
-];
+type CategoryItem = { slug: string; label: string };
 
 function HomeInner() {
   const router = useRouter();
@@ -24,6 +14,42 @@ function HomeInner() {
   const [count, setCount] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [catLoading, setCatLoading] = useState(false);
+  const [catError, setCatError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCatLoading(true);
+      setCatError(null);
+      try {
+        const r = await fetch("/api/categories");
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+        const items = Array.isArray(j?.items) ? j.items : [];
+        if (alive)
+          setCategories(
+            items.map((x: any) => ({ slug: x.slug, label: x.label }))
+          );
+      } catch (e) {
+        if (alive) setCatError((e as Error).message);
+      } finally {
+        if (alive) setCatLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const categoryOptions = useMemo(
+    () => [
+      { value: "", label: "未指定" },
+      ...categories.map((c) => ({ value: c.slug, label: c.label })),
+    ],
+    [categories]
+  );
 
   async function start() {
     setError(null);
@@ -37,9 +63,12 @@ function HomeInner() {
         body: JSON.stringify(payload),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
+      if (!r.ok)
+        throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
       if (!Array.isArray(data) || data.length === 0) {
-        throw new Error("問題が取得できませんでした。条件を変えて再試行してください。");
+        throw new Error(
+          "問題が取得できませんでした。条件を変えて再試行してください。"
+        );
       }
       setQuestions(data);
       router.push("/play");
@@ -59,34 +88,47 @@ function HomeInner() {
       </header>
 
       <div className="grid gap-4">
-        <div className="card p-5">
-          <label className="block text-sm mb-2">ジャンル（未指定可）</label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {CATEGORIES.map((c) => (
-              <button
-                key={c.slug || "any"}
-                type="button"
-                className={`btn ${category === c.slug ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setCategory(c.slug)}
-              >
-                {c.label}
-              </button>
-            ))}
+        <div className="card p-5 grid gap-2">
+          <label className="block text-sm">ジャンル（未指定可）</label>
+          <div className="grid sm:grid-cols-2 gap-3 items-end">
+            <div>
+              <Select
+                value={category}
+                onChange={(v) => setCategory(v)}
+                options={categoryOptions}
+              />
+            </div>
+            {catLoading && (
+              <div className="text-sm text-white/60">読込中...</div>
+            )}
+            {catError && <div className="text-sm text-red-400">{catError}</div>}
           </div>
+        </div>
+
+        <div className="card p-5 flex items-center justify-between gap-3">
+          <div>
+            <div className="font-semibold">対戦モード</div>
+            <div className="text-sm text-white/70">
+              友だちと同時参加のクイズ対戦
+            </div>
+          </div>
+          <a className="btn btn-ghost" href="/play/buzzer">
+            移動
+          </a>
         </div>
 
         <div className="card p-5 grid sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm mb-1">難易度</label>
-            <select
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+            <Select
               value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-            >
-              <option value="easy">easy</option>
-              <option value="normal">normal</option>
-              <option value="hard">hard</option>
-            </select>
+              onChange={(v) => setDifficulty(v as Difficulty)}
+              options={[
+                { value: "easy", label: "easy" },
+                { value: "normal", label: "normal" },
+                { value: "hard", label: "hard" },
+              ]}
+            />
           </div>
           <div>
             <label className="block text-sm mb-1">出題数</label>
@@ -96,11 +138,17 @@ function HomeInner() {
               max={10}
               className="w-full bg-transparent border border-white/10 rounded-md p-2"
               value={count}
-              onChange={(e) => setCount(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+              onChange={(e) =>
+                setCount(Math.max(1, Math.min(10, Number(e.target.value) || 1)))
+              }
             />
           </div>
           <div className="flex items-end">
-            <button className="btn btn-primary w-full" onClick={start} disabled={loading}>
+            <button
+              className="btn btn-primary w-full"
+              onClick={start}
+              disabled={loading}
+            >
               {loading ? "生成中..." : "スタート"}
             </button>
           </div>
@@ -112,12 +160,10 @@ function HomeInner() {
           </div>
         )}
       </div>
-
-      <footer className="text-center text-sm text-white/60">
-        gpt-5-nano のみ使用。APIキーはサーバ側で保持。
-      </footer>
     </div>
   );
 }
 
-export default function Home() { return <HomeInner />; }
+export default function Home() {
+  return <HomeInner />;
+}

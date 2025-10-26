@@ -81,7 +81,8 @@ export async function POST(req: NextRequest) {
     if (lower.includes("japan") || raw.includes("日本")) return "japan";
     if (lower.includes("world") || raw.includes("世界")) return "world";
     if (lower.includes("society") || raw.includes("時事") || raw.includes("社会")) return "society";
-    return "trivia";
+    // 収束せず、入力をそのまま小文字スラッグとして返す
+    return lower || "trivia";
   }
 
   const supabase = serverSupabaseService();

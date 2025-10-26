@@ -93,6 +93,7 @@ insert into public.categories (slug, label) values
   ('science','理系・科学'),
   ('entertainment','文化・エンタメ'),
   ('otaku','アニメ・ゲーム・漫画'),
+  ('doraemon','ドラえもん'),
   ('trivia','雑学'),
   ('japan','日本'),
   ('world','世界'),

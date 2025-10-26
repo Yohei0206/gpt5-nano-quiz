@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
+import Select from "@/components/Select";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
 
@@ -46,6 +47,11 @@ const categories: {
       { slug: "game", label: "ゲーム" },
       { slug: "manga", label: "漫画" },
     ],
+  },
+  {
+    slug: "doraemon",
+    label: "ドラえもん",
+    subgenres: [],
   },
   {
     slug: "trivia",
@@ -349,12 +355,23 @@ export default function AdminPage() {
         return data as { inserted?: number };
       });
       const results = await Promise.allSettled(jobs);
-      const ok = results.filter((x) => x.status === "fulfilled") as PromiseFulfilledResult<{ inserted?: number }>[];
-      const ng = results.filter((x) => x.status === "rejected") as PromiseRejectedResult[];
-      const insertedTotal = ok.reduce((sum, r) => sum + (r.value?.inserted ?? 0), 0);
-      setInfo(`並列実行完了: 成功 ${ok.length} / ${results.length}、保存 ${insertedTotal} 件`);
+      const ok = results.filter(
+        (x) => x.status === "fulfilled"
+      ) as PromiseFulfilledResult<{ inserted?: number }>[];
+      const ng = results.filter(
+        (x) => x.status === "rejected"
+      ) as PromiseRejectedResult[];
+      const insertedTotal = ok.reduce(
+        (sum, r) => sum + (r.value?.inserted ?? 0),
+        0
+      );
+      setInfo(
+        `並列実行完了: 成功 ${ok.length} / ${results.length}、保存 ${insertedTotal} 件`
+      );
       if (ng.length) setError(`失敗 ${ng.length} 件（コンソール参照）`);
-      try { console.log("[admin] parallel results", results); } catch {}
+      try {
+        console.log("[admin] parallel results", results);
+      } catch {}
       await loadPreview();
     } catch (e) {
       setError((e as Error).message);
@@ -493,145 +510,20 @@ export default function AdminPage() {
       </header>
 
       <div className="card p-5 grid gap-4">
-        <div className="grid gap-3">
-          <div>
-            <label className="block text-sm mb-2">カテゴリ（固定）</label>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {categories.map((c) => {
-                const active = c.slug === category;
-                return (
-                  <button
-                    type="button"
-                    key={c.slug}
-                    onClick={() => {
-                      setCategory(c.slug);
-                      setSubgenre("");
-                    }}
-                    className={`btn ${
-                      active ? "btn-primary" : "btn-ghost"
-                    } w-full`}
-                  >
-                    {c.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm mb-1">サブジャンル</label>
-              <select
-                className="w-full bg-transparent border border-white/10 rounded-md p-2"
-                value={subgenre}
-                onChange={(e) => setSubgenre(e.target.value)}
-              >
-                <option value="">（なし）</option>
-                {subs.map((s) => (
-                  <option key={s.slug} value={s.slug}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm mb-1">難易度</label>
-              <select
-                className="w-full bg-transparent border border-white/10 rounded-md p-2"
-                value={difficulty}
-                onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-              >
-                <option value="easy">easy</option>
-                <option value="normal">normal</option>
-                <option value="hard">hard</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1">設問</label>
-          <textarea
-            className="w-full bg-transparent border border-white/10 rounded-md p-2"
-            rows={3}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="問題文を入力"
-          />
-        </div>
-
-        <div className="grid sm:grid-cols-2 gap-3">
-          {choices.map((c, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="answer"
-                checked={answerIndex === i}
-                onChange={() => setAnswerIndex(i)}
-              />
-              <input
-                className="flex-1 bg-transparent border border-white/10 rounded-md p-2"
-                value={c}
-                onChange={(e) =>
-                  setChoices((prev) =>
-                    prev.map((v, idx) => (idx === i ? e.target.value : v))
-                  )
-                }
-                placeholder={`選択肢 ${i + 1}`}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1">解説（任意）</label>
-          <textarea
-            className="w-full bg-transparent border border-white/10 rounded-md p-2"
-            rows={2}
-            value={explanation}
-            onChange={(e) => setExplanation(e.target.value)}
-            placeholder="解説を入力（最大300文字）"
-          />
-        </div>
-
-        <div className="flex gap-3 justify-end">
-          <button className="btn btn-ghost" onClick={resetForm}>
-            リセット
-          </button>
-          <button className="btn btn-primary" onClick={addItem}>
-            問題を追加
-          </button>
-        </div>
-
-        {error && (
-          <div className="p-3 border border-red-500/40 text-red-300 rounded-md">
-            {error}
-          </div>
-        )}
-        {info && (
-          <div className="p-3 border border-green-500/40 text-green-300 rounded-md">
-            {info}
-          </div>
-        )}
-      </div>
-
-      <div className="card p-5 grid gap-4">
         <div className="font-semibold">
           ジャンル指定でGPT生成（直接Supabaseへ保存）
         </div>
         <div className="grid sm:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm mb-1">ジャンル（固定）</label>
-            <select
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+            <Select
               value={genGenre}
-              onChange={(e) => setGenGenre(e.target.value)}
-            >
-              {categories.map((c) => (
-                <option key={c.slug} value={c.slug}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+              onChange={setGenGenre}
+              options={categories.map((c) => ({
+                value: c.slug,
+                label: c.label,
+              }))}
+            />
           </div>
           <div>
             <label className="block text-sm mb-1">件数</label>
@@ -650,16 +542,16 @@ export default function AdminPage() {
           </div>
           <div>
             <label className="block text-sm mb-1">難易度</label>
-            <select
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+            <Select
               value={genDifficulty}
-              onChange={(e) => setGenDifficulty(e.target.value as any)}
-            >
-              <option value="easy">easy</option>
-              <option value="normal">normal</option>
-              <option value="hard">hard</option>
-              <option value="mixed">mixed</option>
-            </select>
+              onChange={(v) => setGenDifficulty(v as any)}
+              options={[
+                { value: "easy", label: "easy" },
+                { value: "normal", label: "normal" },
+                { value: "hard", label: "hard" },
+                { value: "mixed", label: "mixed" },
+              ]}
+            />
           </div>
           <div>
             <label className="block text-sm mb-1">並列数</label>
@@ -692,88 +584,6 @@ export default function AdminPage() {
           >
             {parallelRunning ? "並列中..." : "並列で生成・保存"}
           </button>
-          <button
-            className="btn btn-ghost"
-            onClick={previewGenerate}
-            disabled={generating}
-          >
-            生成プレビュー
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={loadPreview}
-            disabled={loadingPreview}
-          >
-            {loadingPreview ? "読み込み中..." : "最新を取得"}
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={testOpenAI}
-            disabled={testing}
-          >
-            {testing ? "テスト中..." : "OpenAI接続テスト"}
-          </button>
-        </div>
-      </div>
-
-      <div className="card p-5">
-        <div className="flex justify-between items-center mb-3">
-          <div className="font-semibold">作成した問題（{items.length}件）</div>
-          <div className="flex gap-2">
-            <button className="btn btn-ghost" onClick={() => setItems([])}>
-              全削除
-            </button>
-            <button className="btn btn-success" onClick={copyJSON}>
-              JSONをコピー
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={saveAll}
-              disabled={saving}
-            >
-              {saving ? "保存中..." : "Supabaseに保存"}
-            </button>
-          </div>
-        </div>
-
-        <div className="grid gap-3">
-          {items.map((q) => (
-            <div key={q.id} className="p-3 border border-white/10 rounded-md">
-              <div className="text-sm text-white/60 mb-1">
-                {q.category}
-                {q.subgenre ? ` / ${q.subgenre}` : ""} ・ {q.difficulty}
-              </div>
-              <div className="font-semibold mb-1">{q.prompt}</div>
-              <ol className="list-decimal ml-5">
-                {q.choices.map((c, i) => (
-                  <li
-                    key={i}
-                    className={
-                      i === q.answerIndex ? "text-green-400" : undefined
-                    }
-                  >
-                    {c}
-                  </li>
-                ))}
-              </ol>
-              {q.explanation && (
-                <div className="text-sm text-white/80 mt-1">
-                  解説: {q.explanation}
-                </div>
-              )}
-              <div className="text-right">
-                <button
-                  className="btn btn-ghost mt-2"
-                  onClick={() => remove(q.id)}
-                >
-                  削除
-                </button>
-              </div>
-            </div>
-          ))}
-          {items.length === 0 && (
-            <div className="text-white/60">まだ追加されていません。</div>
-          )}
         </div>
       </div>
     </div>

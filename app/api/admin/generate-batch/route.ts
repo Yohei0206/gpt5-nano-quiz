@@ -128,20 +128,83 @@ export async function POST(req: NextRequest) {
   if (!apiKey) return json({ error: "Missing OpenAI API key" }, 500);
 
   const system = [
-    "あなたは安全なクイズ作成アシスタントです。",
-    "- 出力はJSON配列のみ。前後の説明やコードフェンスは禁止。",
-    "- 要素は {id,prompt,choices(4),answerIndex,explanation?,category,subgenre?,difficulty,source}。",
-    "- choicesは重複なく妥当な選択肢を4つ。",
-    "- 不適切表現や医療・法律助言は禁止。",
+    "あなたは事実ベースの4択クイズ作成アシスタントです。",
+    "要件:",
+    "- 出力はJSON配列のみ（前後の説明・コードフェンス禁止）。",
+    "- 各要素は {id,prompt,choices(4),answerIndex,explanation?,category,subgenre?,difficulty,source} を必須/準拠。",
+    "- 言語がjaのとき、自然で読みやすい日本語（です・ます調）で作成。機械翻訳のような不自然な語順や重複を避ける。",
+    "- promptは明確・中立・一意解。語尾や主語を省かず、情報不足・曖昧・トリック禁止。",
+    "- choicesは意味が重ならない4つ。『以上すべて』『どれでもない』禁止。重複語句や同義語の羅列禁止。",
+    "- 正解は1つだけ。紛らわしい誤答は常識的に plausible に。",
+    "- 数値や年号には単位/西暦を明記。地域/時点依存は避ける（例: 最新, 現在 はNG）。",
+    "- explanationはコンパクト（最大200字程度）で、なぜ正解かを端的に補足。固有名は最小限。",
+    "- 不適切表現、個人情報、医療/法律アドバイス、政治的な主張は避ける。",
+    "- バリエーション重視: 同一の題材/事実の言い換えや、数値だけを変えた類題を作らない。バッチ内でトピックを分散。",
+    "- 同一/近似トピックが続く場合は、視点や時代・領域を変えて重複を避ける。",
   ].join("\n");
 
   const difficulty = body.difficulty === "mixed" ? "mixed" : body.difficulty;
+  // カテゴリをテーブルのスラッグへ正規化
+  const CATEGORY_SLUGS = new Set([
+    "general",
+    "science",
+    "entertainment",
+    "trivia",
+    "japan",
+    "world",
+    "society",
+  ]);
+  function normalizeCategory(input: string): string {
+    const raw = (input || "").trim();
+    const lower = raw.toLowerCase();
+    if (CATEGORY_SLUGS.has(lower)) return lower;
+    const alias: Record<string, string> = {
+      "一般教養": "general",
+      "理系・科学": "science",
+      "理系": "science",
+      "文化・エンタメ": "entertainment",
+      "エンタメ": "entertainment",
+      "雑学": "trivia",
+      "日本": "japan",
+      "世界": "world",
+      "時事・社会": "society",
+      "時事": "society",
+      "アニメ・ゲーム・漫画": "entertainment",
+      "アニメ": "entertainment",
+      "ゲーム": "entertainment",
+      "漫画": "entertainment",
+    };
+    if (raw in alias) return alias[raw];
+    if (lower in alias) return alias[lower];
+    if (lower.includes("entertain")) return "entertainment";
+    if (lower.includes("general")) return "general";
+    if (lower.includes("science") || raw.includes("理系") || raw.includes("科学")) return "science";
+    if (lower.includes("trivia") || raw.includes("雑学")) return "trivia";
+    if (lower.includes("japan") || raw.includes("日本")) return "japan";
+    if (lower.includes("world") || raw.includes("世界")) return "world";
+    if (lower.includes("society") || raw.includes("時事") || raw.includes("社会")) return "society";
+    // 収束せず、入力をそのままスラッグとして使う（安全のため小文字化）
+    return lower || "trivia";
+  }
+  const categorySlug = normalizeCategory(body.genre);
   const user = [
-    `ジャンル/Category: ${body.genre}`,
+    `ジャンル/Category: ${categorySlug}`,
     `難易度/Difficulty: ${difficulty}`,
     `言語/Language: ${body.language}`,
     `出題数/Count: ${body.count}`,
-    "重要: 必ず Count 件の要素を持つ JSON 配列のみを返すこと。空配列や不足は禁止。",
+    "フォーマット厳守: JSON配列のみを返す（itemsラップ不要）。",
+    "各要素の仕様:",
+    "- id: 一意な文字列",
+    "- prompt: 200字以内、明確・一意解の設問文",
+    "- choices: 4件。重複/同義不可。単位/範囲/時点は明確に",
+    "- answerIndex: 0..3 の整数（唯一の正解）",
+    "- explanation: 200字以内の簡潔な補足（任意）",
+    "- category: 入力のジャンルをそのまま設定",
+    "- subgenre: 任意（適切なら設定）",
+    "- difficulty: easy|normal|hard（mixed時は各問に適切に付与）",
+    "- source: 'generated:nano' 等の由来",
+    "注意: 文頭/文末に余計な文字、コードフェンス、コメント、空配列・件数不足は禁止。",
+    "重複禁止: 同一/ほぼ同一の題材・言い換え・誤差違い（西暦や人数だけ変更）を含めない。サブトピックを分散。",
   ].join("\n");
 
   const url = "https://api.openai.com/v1/responses";
@@ -459,11 +522,70 @@ export async function POST(req: NextRequest) {
       return "normal";
     }
 
+    // 品質チェック用ユーティリティ
+    function normalizeJa(s: string) {
+      return (s || "")
+        .trim()
+        .replace(/[\u3000\s]+/g, " ")
+        .replace(/[“”]/g, '"')
+        .replace(/[’]/g, "'")
+        .replace(/[‐‑‒–—―]/g, "-")
+        .replace(/[．｡]/g, ".")
+        .replace(/[，､]/g, ",")
+        .replace(/[！]/g, "!")
+        .replace(/[？]/g, "?");
+    }
+    function japaneseRatio(s: string) {
+      const txt = (s || "").replace(/\s+/g, "");
+      if (!txt) return 0;
+      let ja = 0;
+      for (const ch of txt) {
+        const code = ch.codePointAt(0) || 0;
+        // Hiragana, Katakana, Kanji ranges (basic)
+        if (
+          (code >= 0x3040 && code <= 0x30ff) ||
+          (code >= 0x4e00 && code <= 0x9faf) ||
+          (code >= 0x3400 && code <= 0x4dbf)
+        )
+          ja++;
+      }
+      return ja / txt.length;
+    }
+    function hasProhibitedPhrases(s: string) {
+      const t = s.toLowerCase();
+      return (
+        t.includes("以上すべて") ||
+        t.includes("上記すべて") ||
+        t.includes("どれでもない") ||
+        t.includes("none of the above") ||
+        t.includes("all of the above")
+      );
+    }
+    function dedupeChoices(cs: string[]) {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const c of cs) {
+        const k = normalizeJa(c).toLowerCase().replace(/[\s、,。\.]/g, "");
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        out.push(normalizeJa(c));
+      }
+      return out;
+    }
+    function isNaturalJapaneseText(s: string) {
+      // 要件: 日本語比率が一定以上、怪しい文字連結や不自然な句読点の連続を含まない
+      const ratio = japaneseRatio(s);
+      if (body.language === "ja" && ratio < 0.3) return false;
+      if (/\?{2,}|!{2,}|、{3,}|。{3,}/.test(s)) return false;
+      if (/^[a-z0-9 _.,:;\-]+$/i.test(s)) return false; // ほぼ英数字のみ
+      return true;
+    }
+
     const out = items.map((q, idx) => {
       const promptRaw = q.prompt ?? q.question ?? "";
       const prompt = norm(promptRaw).slice(0, 200);
       const baseChoices = (q.choices ?? q.options ?? []).map((c) => norm(c));
-      const choices = baseChoices.slice(0, 4);
+      const choices = dedupeChoices(baseChoices).slice(0, 4);
       return {
         id: norm(q.id ?? `q_${Date.now()}_${idx}`),
         prompt,
@@ -472,7 +594,7 @@ export async function POST(req: NextRequest) {
         explanation: q.explanation
           ? norm(q.explanation).slice(0, 200)
           : undefined,
-        category: body.genre,
+        category: categorySlug,
         subgenre: q.subgenre ? norm(q.subgenre) : undefined,
         difficulty:
           difficulty === "mixed"
@@ -481,6 +603,182 @@ export async function POST(req: NextRequest) {
         source: q.source ?? "generated:nano",
       };
     });
+
+    // 事前品質フィルタリング + 全件GPTレビュー＆必要時リライト
+    const qualityRejected: any[] = [];
+    async function reviewAndMaybeRepair(q: any) {
+      try {
+        const urlFix = "https://api.openai.com/v1/responses";
+        const payloadFix: any = {
+          model: "gpt-5-nano",
+          input:
+            `次の四択クイズの問題文が自然で明確な日本語（です・ます調）かを評価し、` +
+            `不自然・曖昧・一意解でない場合は200字以内で修正した問題文を提案してください。` +
+            `選択肢と正解インデックスは変更しないでください。\n` +
+            `【対象】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(", ")}\n正解インデックス: ${q.answerIndex}\n` +
+            `出力はJSONのみ: {\"natural\": boolean, \"reason\": string, \"prompt\"?: string, \"explanation\"?: string}`,
+          max_output_tokens: 350,
+          text: {
+            verbosity: "low",
+            format: {
+              type: "json_schema",
+              name: "review",
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["natural", "reason"],
+                properties: {
+                  natural: { type: "boolean" },
+                  reason: { type: "string" },
+                  prompt: { type: "string", maxLength: 200 },
+                  explanation: { type: "string", maxLength: 200 },
+                },
+              },
+            },
+          },
+        };
+        const r = await fetch(urlFix, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify(payloadFix),
+        });
+        const t = await r.text();
+        try {
+          const j = JSON.parse(t);
+          const out = Array.isArray(j.output) ? j.output : [];
+          for (const e of out) {
+            const c = e?.content?.[0];
+            if (c?.type === "json" && c.json) return c.json;
+            if (c?.type === "output_text" && typeof c.text === "string") {
+              try { return JSON.parse(c.text); } catch {}
+            }
+          }
+        } catch {}
+      } catch {}
+      return null;
+    }
+    const qualityKept: typeof out = [];
+    for (const q0 of out) {
+      let q = q0;
+      // 全件レビューの実施
+      const rev = await reviewAndMaybeRepair(q);
+      if (rev && rev.natural === false && typeof rev.prompt === "string") {
+        q = {
+          ...q,
+          prompt: norm(rev.prompt).slice(0, 200),
+          explanation: rev.explanation ? norm(rev.explanation).slice(0, 200) : q.explanation,
+        };
+      }
+      // 最終チェック
+      if (!isNaturalJapaneseText(q.prompt)) {
+        qualityRejected.push({ id: q.id, reason: "日本語として不自然/英語比率過多（修正不可）" });
+        continue;
+      }
+      if (hasProhibitedPhrases(q.prompt)) {
+        qualityRejected.push({ id: q.id, reason: "問題文に不適切な表現（修正不可）" });
+        continue;
+      }
+      if (q.choices.length !== 4) {
+        qualityRejected.push({ id: q.id, reason: "選択肢が4件ではない/重複排除で欠落" });
+        continue;
+      }
+      if (q.choices.some((c) => hasProhibitedPhrases(c))) {
+        qualityRejected.push({ id: q.id, reason: "選択肢に不適切な表現（以上すべて等）" });
+        continue;
+      }
+      if (q.answerIndex < 0 || q.answerIndex > 3) {
+        qualityRejected.push({ id: q.id, reason: "正解インデックス不正" });
+        continue;
+      }
+      if (q.choices.some((c) => c.length > 60)) {
+        qualityRejected.push({ id: q.id, reason: "選択肢が長すぎる" });
+        continue;
+      }
+      qualityKept.push(q);
+    }
+
+    // 既存重複チェック（簡易類似度）: 既存問題と近似した設問を除外（全カテゴリ）
+    // 文字bi-gramのDICE係数がしきい値を超える場合を重複と見なす
+    function normalizePromptForSim(s: string) {
+      return (s || "")
+        .toLowerCase()
+        .replace(/[\s\u3000]+/g, "")
+        .replace(/[！!？?。．,，、\.\-_:;；:\/\\\(\)\[\]『』「」\"'`]/g, "");
+    }
+    function bigrams(s: string): string[] {
+      const a = normalizePromptForSim(s);
+      const res: string[] = [];
+      for (let i = 0; i < a.length - 1; i++) res.push(a.slice(i, i + 2));
+      return res.length ? res : a ? [a] : [];
+    }
+    function dice(a: string, b: string) {
+      const A = bigrams(a);
+      const B = bigrams(b);
+      if (!A.length || !B.length) return 0;
+      const setB = new Map<string, number>();
+      for (const x of B) setB.set(x, (setB.get(x) || 0) + 1);
+      let inter = 0;
+      for (const x of A) {
+        const c = setB.get(x) || 0;
+        if (c > 0) {
+          inter++;
+          setB.set(x, c - 1);
+        }
+      }
+      return (2 * inter) / (A.length + B.length);
+    }
+
+    async function fetchExistingPromptsAll() {
+      try {
+        const supabase = serverSupabaseService();
+        const { data } = await supabase
+          .from("questions")
+          .select("id,prompt,category")
+          .order("created_at", { ascending: false })
+          .limit(1000);
+        return (data || []) as { id: string; prompt: string; category: string }[];
+      } catch {
+        return [] as { id: string; prompt: string; category: string }[];
+      }
+    }
+
+    const existing = await fetchExistingPromptsAll();
+    const DUP_THRESHOLD = 0.60; // わずかに厳格化
+
+    // バッチ内重複の除外（先に近似をはねる）
+    const batchKept: typeof out = [];
+    const batchDupRejected: any[] = [];
+    const BATCH_THRESHOLD = 0.66;
+    function choiceOverlap(a: string[], b: string[]) {
+      const norm = (s: string) => s.toLowerCase().replace(/[\s、,。\.]/g, "");
+      const A = new Set(a.map(norm));
+      const B = new Set(b.map(norm));
+      let inter = 0;
+      for (const x of A) if (B.has(x)) inter++;
+      return inter; // 3以上でほぼ同一
+    }
+    for (const q of qualityKept) {
+      const hit = batchKept.some((k) => dice(q.prompt, k.prompt) >= BATCH_THRESHOLD || choiceOverlap(q.choices, k.choices) >= 3);
+      if (hit) {
+        batchDupRejected.push({ id: q.id, reason: "バッチ内で類似（重複の可能性）" });
+      } else {
+        batchKept.push(q);
+      }
+    }
+
+    const kept: typeof out = [];
+    const dupRejected: any[] = [];
+    for (const q of batchKept) {
+      const isDup = existing.some((e) => dice(q.prompt, e.prompt) >= DUP_THRESHOLD);
+      if (isDup) {
+        dupRejected.push({ id: q.id, reason: "既存と類似（重複の可能性）" });
+      } else {
+        kept.push(q);
+      }
+    }
+
+    // kept を検証対象とする
+    const toVerify = kept;
 
     // 検証（Wikipedia優先→LLM自己チェック）
     async function fetchWikiEvidence(query: string, lang: string = "ja") {
@@ -520,6 +818,17 @@ export async function POST(req: NextRequest) {
     async function verifyWithSources(q: any) {
       const ev = await fetchWikiEvidence(q.prompt);
       if (ev.text && ev.text.length > 0) {
+        // 事前にエビデンス本文と正誤選択肢の突き合わせ（簡易）
+        const normTxt = (ev.text || "").toLowerCase().replace(/\s+/g, "");
+        const correct = (q.choices?.[q.answerIndex] || "").toLowerCase().replace(/\s+/g, "");
+        const distractors = (q.choices || []).filter((_: any, i: number) => i !== q.answerIndex);
+        const wrongHit = distractors.some((c: string) =>
+          normTxt.includes((c || "").toLowerCase().replace(/\s+/g, ""))
+        );
+        const correctHit = correct ? normTxt.includes(correct) : false;
+        if (!correctHit && wrongHit) {
+          return { pass: false, reason: "エビデンスに誤答のみ含まれる/正解が見当たらない" };
+        }
         const urlV = "https://api.openai.com/v1/responses";
         const payloadV: any = {
           model: "gpt-5-nano",
@@ -637,8 +946,8 @@ export async function POST(req: NextRequest) {
     }
 
     const verified: any[] = [];
-    const rejected: any[] = [];
-    for (const q of out) {
+    const rejected: any[] = [...qualityRejected, ...batchDupRejected, ...dupRejected];
+    for (const q of toVerify) {
       try {
         const v = await verifyWithSources(q);
         if (v && v.pass) {
