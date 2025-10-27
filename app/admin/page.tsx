@@ -139,6 +139,10 @@ export default function AdminPage() {
   const [generating, setGenerating] = useState(false);
   const [parallelRunning, setParallelRunning] = useState(false);
   const [parallelCount, setParallelCount] = useState<number>(3);
+  // カテゴリー追加用フォーム
+  const [newCatSlug, setNewCatSlug] = useState("");
+  const [newCatLabel, setNewCatLabel] = useState("");
+  const [addingCategory, setAddingCategory] = useState(false);
   const [preview, setPreview] = useState<any[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -202,6 +206,37 @@ export default function AdminPage() {
     navigator.clipboard
       .writeText(json)
       .then(() => setInfo("JSONをコピーしました。"));
+  }
+
+  async function addCategory() {
+    if (!newCatSlug.trim() || !newCatLabel.trim()) {
+      setError("スラッグと表示名を入力してください");
+      return;
+    }
+    setAddingCategory(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await fetch("/api/admin/categories", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
+            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
+            : {}),
+        },
+        body: JSON.stringify({ slug: newCatSlug.trim(), label: newCatLabel.trim() }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+      setInfo(`カテゴリーを追加しました: ${data.item?.label || newCatLabel}`);
+      setNewCatSlug("");
+      setNewCatLabel("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAddingCategory(false);
+    }
   }
 
   function remove(id: string) {
@@ -508,6 +543,34 @@ export default function AdminPage() {
           へ反映してください。
         </p>
       </header>
+      <div className="card p-5 grid gap-4">
+        <div className="font-semibold">カテゴリー管理</div>
+        <div className="grid sm:grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="block text-sm mb-1">スラッグ（英数字・ハイフン）</label>
+            <input
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              placeholder="例: doraemon"
+              value={newCatSlug}
+              onChange={(e) => setNewCatSlug(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">表示名</label>
+            <input
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              placeholder="例: ドラえもん"
+              value={newCatLabel}
+              onChange={(e) => setNewCatLabel(e.target.value)}
+            />
+          </div>
+          <div>
+            <button className="btn btn-primary w-full" onClick={addCategory} disabled={addingCategory}>
+              {addingCategory ? "追加中..." : "カテゴリー追加"}
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div className="card p-5 grid gap-4">
         <div className="font-semibold">
