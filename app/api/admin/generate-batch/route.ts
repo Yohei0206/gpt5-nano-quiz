@@ -131,20 +131,22 @@ export async function POST(req: NextRequest) {
   const system = [
     "あなたは事実ベースの4択クイズ作成アシスタントです。",
     "要件:",
-    "- 出力はJSON配列のみ（前後の説明・コードフェンス禁止）。",
+    "- 出力はstrict JSON array of objectsで、itemsなどのラップや空配列は禁止",
     "- 各要素は {id,prompt,choices(4),answerIndex,explanation?,category,subgenre?,difficulty,source} を必須/準拠。",
     "- 言語がjaのとき、自然で読みやすい日本語（です・ます調）で作成。機械翻訳のような不自然な語順や重複を避ける。",
     "- promptは明確・中立・一意解。語尾や主語を省かず、情報不足・曖昧・トリック禁止。",
-    "- choicesは意味が重ならない4つ。『以上すべて』『どれでもない』禁止。重複語句や同義語の羅列禁止。",
+    "- choicesは意味が重ならない4つの文字列とし、記号・番号・ラベル（例: A., B., ①, a）を付けない。『以上すべて』『どれでもない』は禁止。重複語句や同義語の羅列禁止。",
     "- 正解は1つだけ。紛らわしい誤答は常識的に plausible に。",
     "- 数値や年号には単位/西暦を明記。地域/時点依存は避ける（例: 最新, 現在 はNG）。",
-    "- explanationはコンパクト（最大200字程度）で、なぜ正解かを端的に補足。固有名は最小限。",
+    "explanationは80〜200字程度で、正解の理由と背景を2文構成で説明し、知識として価値のある内容にしてください。",
     "- 不適切表現、個人情報、医療/法律アドバイス、政治的な主張は避ける。",
     "- バリエーション重視: 同一の題材/事実の言い換えや、数値だけを変えた類題を作らない。バッチ内でトピックを分散。",
     "- 同一/近似トピックが続く場合は、視点や時代・領域を変えて重複を避ける。",
     "- 各問題は一貫したテーマ・時代・領域内で構成し、無関係な要素を混在させない。",
     "- 歴史・科学・文化などの事実は、論理的に整合していること。",
     "- 文法的に自然で、主語・述語が対応する文章にする。",
+    "- “構成要素”や“基本単位”を問う場合は、内部パラメータを答えにしない",
+    "- 専門用語・人物名・理論名は実在するもののみを使用し、架空・造語を生成しない。",
   ].join("\n");
 
   const difficulty = body.difficulty === "mixed" ? "mixed" : body.difficulty;
@@ -218,15 +220,22 @@ export async function POST(req: NextRequest) {
     "- subgenre: 任意（適切なら設定）",
     "- difficulty: easy|normal|hard（mixed時は各問に適切に付与）",
     "- source: 'generated:nano' 等の由来",
+    "",
     "注意: 文頭/文末に余計な文字、コードフェンス、コメント、空配列・件数不足は禁止。",
     "重複禁止: 同一/ほぼ同一の題材・言い換え・誤差違い（西暦や人数だけ変更）を含めない。サブトピックを分散。",
     "explanation: 80〜200字程度で、なぜその答えが正しいかを2文構成で説明。",
     "1文目で事実を明示し、2文目で背景・根拠・補足を述べる。",
     "単なる理由文でなく、知識として価値のある説明にする。",
+    "内部推論（thinking）:",
+    "各問題を出力する前に、内部的に次の3段階で検討を行うこと。",
+    "1. 問題テーマの焦点を明確化し、設問が一意解となるか確認。",
+    "2. 正答と誤答候補の因果・時代・語義・事実整合性を論理的に検討。",
+    "3. 出力前に内容の自然さ、日本語の表現、整合性を最終確認。",
+    "これらの思考過程は出力に含めない。",
   ].join("\n");
 
   const url = "https://api.openai.com/v1/responses";
-  const budget = 1000;
+  const budget = 1800;
   // Collect parsed JSON outputs from review/verify/validate calls for debugging when debugFlag is set
   const gptDebug: Record<string, any> = {};
 
@@ -885,7 +894,8 @@ export async function POST(req: NextRequest) {
         const hits = sj?.query?.search ?? [];
         const texts: string[] = [];
         const urls: string[] = [];
-        for (const h of hits.slice(0, 2)) {
+        // Collect up to 3 results to provide multiple pieces of evidence
+        for (const h of hits.slice(0, 3)) {
           const title = h?.title;
           if (!title) continue;
           const sumUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
@@ -947,6 +957,11 @@ export async function POST(req: NextRequest) {
             `\n- 「約」「およそ」などの曖昧表現は容認` +
             `\n- 出典が不明な場合は source_url を null にする` +
             `\n- JSON以外の出力は禁止` +
+            `\n\n重要: 判定には根拠を3件まで提示してください。` +
+            `\n- 各根拠は短い一文（何を根拠にするか）と対応する source_url を含めること。` +
+            `\n- JSON フィールド名は "evidence" とし、次の形式の配列を返すこと:` +
+            `\n  "evidence": [{ "reason": string, "source_url": string | null }, ...]` +
+            `\n- 根拠が3件未満の場合は見つかった分だけ返し、残りは省略すること。` +
             `\n\n【クイズ】` +
             `\n問題: ${q.prompt}` +
             `\n選択肢: ${q.choices.join(", ")}` +
@@ -1049,6 +1064,11 @@ export async function POST(req: NextRequest) {
           `\n- 「約」「およそ」などの曖昧表現は容認` +
           `\n- 出典が不明な場合は source_url を null にする` +
           `\n- JSON以外の出力は禁止` +
+          `\n\n重要: 判定には根拠を3件まで提示してください。` +
+          `\n- 各根拠は短い一文（何を根拠にするか）と対応する source_url を含めること。` +
+          `\n- JSON フィールド名は "evidence" とし、次の形式の配列を返すこと:` +
+          `\n  "evidence": [{ "reason": string, "source_url": string | null }, ...]` +
+          `\n- 根拠が3件未満の場合は見つかった分だけ返し、残りは省略すること。` +
           `\n\n問題: ${q.prompt}` +
           `\n選択肢: ${q.choices.join(", ")}` +
           `\n送られた正解インデックス: ${q.answerIndex}` +
@@ -1147,6 +1167,11 @@ export async function POST(req: NextRequest) {
             `\n- 「約」「およそ」などの曖昧表現は容認` +
             `\n- 出典が不明な場合は source_url を null にする` +
             `\n- JSON以外の出力は禁止` +
+            `\n\n重要: 判定には根拠を3件まで提示してください。` +
+            `\n- 各根拠は短い一文（何を根拠にするか）と対応する source_url を含めること。` +
+            `\n- JSON フィールド名は "evidence" とし、次の形式の配列を返すこと:` +
+            `\n  "evidence": [{ "reason": string, "source_url": string | null }, ...]` +
+            `\n- 根拠が3件未満の場合は見つかった分だけ返し、残りは省略すること。` +
             `\n\n【クイズ】` +
             `\n問題: ${q.prompt}` +
             `\n選択肢: ${q.choices.join(", ")}` +
