@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { logJsonLine } from "@/lib/logger";
 
 export const runtime = "nodejs";
 const budget = 1200;
@@ -128,12 +127,6 @@ async function verifyWithSources(q: any, apiKey: string) {
   const urlV = "https://api.openai.com/v1/responses";
   if (ev.text && ev.text.length > 0) {
     const payloadV: any = buildValidationPayloadWithEvidence(q, ev.text);
-    await logJsonLine("gpt_request", {
-      purpose: "admin:validate-question",
-      mode: "with-evidence",
-      id: q?.id ?? null,
-      model: "gpt-5-nano",
-    });
     const r = await fetch(urlV, {
       method: "POST",
       headers: {
@@ -143,16 +136,6 @@ async function verifyWithSources(q: any, apiKey: string) {
       body: JSON.stringify(payloadV),
     });
     try {
-      await logJsonLine("gpt_response", {
-        purpose: "admin:validate-question",
-        mode: "with-evidence",
-        id: q?.id ?? null,
-        status: r.status,
-        requestId:
-          r.headers.get("x-request-id") ||
-          r.headers.get("openai-organization-request-id") ||
-          null,
-      });
       const t = await r.text();
       const j = JSON.parse(t);
       const out = Array.isArray(j.output) ? j.output : [];
@@ -176,12 +159,6 @@ async function verifyWithSources(q: any, apiKey: string) {
 
   // フォールバック: 自己検証
   const fallbackPayload: any = buildFallbackValidationPayload(q);
-  await logJsonLine("gpt_request", {
-    purpose: "admin:validate-question",
-    mode: "fallback",
-    id: q?.id ?? null,
-    model: "gpt-5-nano",
-  });
   const r = await fetch(urlV, {
     method: "POST",
     headers: {
@@ -192,16 +169,6 @@ async function verifyWithSources(q: any, apiKey: string) {
   });
   const t = await r.text();
   try {
-    await logJsonLine("gpt_response", {
-      purpose: "admin:validate-question",
-      mode: "fallback",
-      id: q?.id ?? null,
-      status: r.status,
-      requestId:
-        r.headers.get("x-request-id") ||
-        r.headers.get("openai-organization-request-id") ||
-        null,
-    });
     const j = JSON.parse(t);
     const out = Array.isArray(j.output) ? j.output : [];
     for (const e of out) {
@@ -262,10 +229,10 @@ export async function POST(req: NextRequest) {
       t.includes("all of the above")
     );
   }
-  const results: any[] = [];
+  const results = [] as any[];
   for (const q of items) {
     try {
-      // 先に静的品質チェック
+      // 静的チェック
       const jaPrompt = japaneseRatio(q.prompt) >= 0.3;
       const uniqueChoices = (() => {
         const seen = new Set<string>();
@@ -291,10 +258,5 @@ export async function POST(req: NextRequest) {
       results.push({ id: q.id ?? null, pass: false, reason: "検証エラー" });
     }
   }
-  await logJsonLine("gpt_job_done", {
-    endpoint: "/api/admin/validate-question",
-    total: items.length,
-    pass: results.filter((r: any) => r?.pass).length,
-  });
   return json({ results }, 200);
 }

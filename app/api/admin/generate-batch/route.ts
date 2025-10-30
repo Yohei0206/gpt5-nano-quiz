@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { serverSupabaseService } from "@/lib/supabase";
+import { logJsonLine } from "@/lib/logger";
 
 export const runtime = "nodejs"; // Service Role 使用
 
@@ -141,6 +142,9 @@ export async function POST(req: NextRequest) {
     "- 不適切表現、個人情報、医療/法律アドバイス、政治的な主張は避ける。",
     "- バリエーション重視: 同一の題材/事実の言い換えや、数値だけを変えた類題を作らない。バッチ内でトピックを分散。",
     "- 同一/近似トピックが続く場合は、視点や時代・領域を変えて重複を避ける。",
+    "- 各問題は一貫したテーマ・時代・領域内で構成し、無関係な要素を混在させない。",
+    "- 歴史・科学・文化などの事実は、論理的に整合していること。",
+    "- 文法的に自然で、主語・述語が対応する文章にする。",
   ].join("\n");
 
   const difficulty = body.difficulty === "mixed" ? "mixed" : body.difficulty;
@@ -159,30 +163,40 @@ export async function POST(req: NextRequest) {
     const lower = raw.toLowerCase();
     if (CATEGORY_SLUGS.has(lower)) return lower;
     const alias: Record<string, string> = {
-      "一般教養": "general",
+      一般教養: "general",
       "理系・科学": "science",
-      "理系": "science",
+      理系: "science",
       "文化・エンタメ": "entertainment",
-      "エンタメ": "entertainment",
-      "雑学": "trivia",
-      "日本": "japan",
-      "世界": "world",
+      エンタメ: "entertainment",
+      雑学: "trivia",
+      日本: "japan",
+      世界: "world",
       "時事・社会": "society",
-      "時事": "society",
+      時事: "society",
       "アニメ・ゲーム・漫画": "entertainment",
-      "アニメ": "entertainment",
-      "ゲーム": "entertainment",
-      "漫画": "entertainment",
+      アニメ: "entertainment",
+      ゲーム: "entertainment",
+      漫画: "entertainment",
     };
     if (raw in alias) return alias[raw];
     if (lower in alias) return alias[lower];
     if (lower.includes("entertain")) return "entertainment";
     if (lower.includes("general")) return "general";
-    if (lower.includes("science") || raw.includes("理系") || raw.includes("科学")) return "science";
+    if (
+      lower.includes("science") ||
+      raw.includes("理系") ||
+      raw.includes("科学")
+    )
+      return "science";
     if (lower.includes("trivia") || raw.includes("雑学")) return "trivia";
     if (lower.includes("japan") || raw.includes("日本")) return "japan";
     if (lower.includes("world") || raw.includes("世界")) return "world";
-    if (lower.includes("society") || raw.includes("時事") || raw.includes("社会")) return "society";
+    if (
+      lower.includes("society") ||
+      raw.includes("時事") ||
+      raw.includes("社会")
+    )
+      return "society";
     // 収束せず、入力をそのままスラッグとして使う（安全のため小文字化）
     return lower || "trivia";
   }
@@ -198,6 +212,7 @@ export async function POST(req: NextRequest) {
     "- prompt: 200字以内、明確・一意解の設問文",
     "- choices: 4件。重複/同義不可。単位/範囲/時点は明確に",
     "- answerIndex: 0..3 の整数（唯一の正解）",
+    "- answerIndex の分布: バッチ内で 0,1,2,3 がなるべく均等に分布するように配慮してください（各インデックスがほぼ同数になることを目指してください）。",
     "- explanation: 200字以内の簡潔な補足（任意）",
     "- category: 入力のジャンルをそのまま設定",
     "- subgenre: 任意（適切なら設定）",
@@ -205,10 +220,15 @@ export async function POST(req: NextRequest) {
     "- source: 'generated:nano' 等の由来",
     "注意: 文頭/文末に余計な文字、コードフェンス、コメント、空配列・件数不足は禁止。",
     "重複禁止: 同一/ほぼ同一の題材・言い換え・誤差違い（西暦や人数だけ変更）を含めない。サブトピックを分散。",
+    "explanation: 80〜200字程度で、なぜその答えが正しいかを2文構成で説明。",
+    "1文目で事実を明示し、2文目で背景・根拠・補足を述べる。",
+    "単なる理由文でなく、知識として価値のある説明にする。",
   ].join("\n");
 
   const url = "https://api.openai.com/v1/responses";
-  const budget = 1800;
+  const budget = 1000;
+  // Collect parsed JSON outputs from review/verify/validate calls for debugging when debugFlag is set
+  const gptDebug: Record<string, any> = {};
 
   function buildJsonSchema() {
     return {
@@ -270,6 +290,13 @@ export async function POST(req: NextRequest) {
   } as const;
 
   async function call(p: any) {
+    try {
+      await logJsonLine("gpt_request", {
+        purpose: "generate-batch:create",
+        model: p?.model,
+        schemaName: p?.text?.format?.name ?? null,
+      });
+    } catch {}
     const r = await fetch(url, {
       method: "POST",
       headers: {
@@ -284,14 +311,13 @@ export async function POST(req: NextRequest) {
       null;
     const text = await r.text();
     try {
-      console.log("[generate-batch] fetch response", {
+      // Persist response metadata + raw for debugging
+      await logJsonLine("gpt_response", {
+        purpose: "generate-batch:create",
         status: r.status,
         requestId: reqId,
+        raw: text.slice(0, 20000), // cap to avoid extremely large logs
       });
-      console.log(
-        "[generate-batch] raw response (first 2000 chars):\n",
-        text.slice(0, 2000)
-      );
     } catch {}
     if (!r.ok) {
       const e = new Error(`OpenAI error ${r.status}: ${text}`) as any;
@@ -308,12 +334,11 @@ export async function POST(req: NextRequest) {
   try {
     // 1st attempt
     const res1 = await call(payload);
+    // retry results are stored here for debugging if all attempts fail
+    let res2: any = undefined;
+    let res3: any = undefined;
     const j1 = (res1 as any).json;
-    try {
-      console.log("[generate-batch] attempt1 response", {
-        requestId: (res1 as any).requestId,
-      });
-    } catch {}
+    // attempt1 response logged via logJsonLine; removed console.log
 
     let items: z.infer<typeof RawArr> = parseFromAny(j1) as any[];
     const first1 = j1?.output?.[0]?.content?.[0];
@@ -346,16 +371,11 @@ export async function POST(req: NextRequest) {
         } catch {}
       }
     }
-    try {
-      console.log(
-        "[generate-batch] after attempt1 items:",
-        Array.isArray(items) ? items.length : 0
-      );
-    } catch {}
+    // item count logged via logJsonLine when needed; removed console.log
 
     // Retry with JSON-only enforcement if needed
     if (!Array.isArray(items) || items.length === 0) {
-      const res2 = await call({
+      res2 = await call({
         ...payload,
         input: `${system}\n\n${user}\n出力は必ずJSON配列のみ。コードフェンスや説明は禁止。`,
         text: { verbosity: "low", format: buildJsonSchema() },
@@ -400,7 +420,7 @@ export async function POST(req: NextRequest) {
     // Schema-hint retry
     if (!Array.isArray(items) || items.length === 0) {
       const schemaHint = `以下の形式でJSON配列のみで返してください。例\n[\n  {"id":"q1","prompt":"...","choices":["A","B","C","D"],"answerIndex":1,"explanation":"...","category":"${body.genre}","difficulty":"normal","source":"generated:nano"}\n]`;
-      const res3 = await call({
+      res3 = await call({
         ...payload,
         input: `${system}\n\n${user}\n${schemaHint}`,
         text: { verbosity: "low", format: buildJsonSchema() },
@@ -443,11 +463,21 @@ export async function POST(req: NextRequest) {
     }
 
     if (!Array.isArray(items) || items.length === 0) {
+      // 失敗時は OpenAI の raw / requestId を含むデバッグ情報を返す
+      const debug: any = {
+        attempt1_raw: (res1 as any)?.raw ?? null,
+        attempt1_requestId: (res1 as any)?.requestId ?? null,
+        attempt2_raw: (res2 as any)?.raw ?? null,
+        attempt2_requestId: (res2 as any)?.requestId ?? null,
+        attempt3_raw: (res3 as any)?.raw ?? null,
+        attempt3_requestId: (res3 as any)?.requestId ?? null,
+      };
       return json(
         {
           error:
-            "生成結果が空でした。ジャンルや件数を見直して再試行してください。",
+            "生成結果が空でした。詳細は debug を確認してください（raw/responsetext）。ジャンルや件数を見直して再試行してください。",
           attempted: true,
+          debug,
         },
         422
       );
@@ -565,7 +595,9 @@ export async function POST(req: NextRequest) {
       const seen = new Set<string>();
       const out: string[] = [];
       for (const c of cs) {
-        const k = normalizeJa(c).toLowerCase().replace(/[\s、,。\.]/g, "");
+        const k = normalizeJa(c)
+          .toLowerCase()
+          .replace(/[\s、,。\.]/g, "");
         if (!k || seen.has(k)) continue;
         seen.add(k);
         out.push(normalizeJa(c));
@@ -615,9 +647,11 @@ export async function POST(req: NextRequest) {
             `次の四択クイズの問題文が自然で明確な日本語（です・ます調）かを評価し、` +
             `不自然・曖昧・一意解でない場合は200字以内で修正した問題文を提案してください。` +
             `選択肢と正解インデックスは変更しないでください。\n` +
-            `【対象】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(", ")}\n正解インデックス: ${q.answerIndex}\n` +
+            `【対象】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(
+              ", "
+            )}\n正解インデックス: ${q.answerIndex}\n` +
             `出力はJSONのみ: {\"natural\": boolean, \"reason\": string, \"prompt\"?: string, \"explanation\"?: string}`,
-          max_output_tokens: 350,
+          max_output_tokens: budget,
           text: {
             verbosity: "low",
             format: {
@@ -626,34 +660,67 @@ export async function POST(req: NextRequest) {
               schema: {
                 type: "object",
                 additionalProperties: false,
+                // Responses API requires 'required' to include every key listed in 'properties'.
+                // Keep the schema minimal (only required keys) to avoid invalid_json_schema errors.
                 required: ["natural", "reason"],
                 properties: {
                   natural: { type: "boolean" },
                   reason: { type: "string" },
-                  prompt: { type: "string", maxLength: 200 },
-                  explanation: { type: "string", maxLength: 200 },
                 },
               },
             },
           },
         };
+        await logJsonLine("gpt_request", {
+          purpose: "generate-batch:review-repair",
+          id: q.id,
+          model: "gpt-5-nano",
+        });
         const r = await fetch(urlFix, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
           body: JSON.stringify(payloadFix),
         });
         const t = await r.text();
         try {
+          const reqId =
+            r.headers.get("x-request-id") ||
+            r.headers.get("openai-organization-request-id") ||
+            null;
+          // 保存: status/requestId と raw テキストを常にログに残す（400 等の原因追跡用）
+          await logJsonLine("gpt_response", {
+            purpose: "generate-batch:review-repair",
+            status: r.status,
+            requestId: reqId,
+            raw: t,
+            id: q.id,
+          });
           const j = JSON.parse(t);
           const out = Array.isArray(j.output) ? j.output : [];
           for (const e of out) {
             const c = e?.content?.[0];
-            if (c?.type === "json" && c.json) return c.json;
+            if (c?.type === "json" && c.json) {
+              try {
+                gptDebug[q.id] = gptDebug[q.id] || {};
+                gptDebug[q.id].review = c.json;
+              } catch {}
+              return c.json;
+            }
             if (c?.type === "output_text" && typeof c.text === "string") {
-              try { return JSON.parse(c.text); } catch {}
+              try {
+                const parsed = JSON.parse(c.text);
+                gptDebug[q.id] = gptDebug[q.id] || {};
+                gptDebug[q.id].review = parsed;
+                return parsed;
+              } catch {}
             }
           }
-        } catch {}
+        } catch (err) {
+          // JSON 解析などで例外が発生した場合も raw は既にログに記録されているため
+        }
       } catch {}
       return null;
     }
@@ -666,24 +733,38 @@ export async function POST(req: NextRequest) {
         q = {
           ...q,
           prompt: norm(rev.prompt).slice(0, 200),
-          explanation: rev.explanation ? norm(rev.explanation).slice(0, 200) : q.explanation,
+          explanation: rev.explanation
+            ? norm(rev.explanation).slice(0, 200)
+            : q.explanation,
         };
       }
       // 最終チェック
       if (!isNaturalJapaneseText(q.prompt)) {
-        qualityRejected.push({ id: q.id, reason: "日本語として不自然/英語比率過多（修正不可）" });
+        qualityRejected.push({
+          id: q.id,
+          reason: "日本語として不自然/英語比率過多（修正不可）",
+        });
         continue;
       }
       if (hasProhibitedPhrases(q.prompt)) {
-        qualityRejected.push({ id: q.id, reason: "問題文に不適切な表現（修正不可）" });
+        qualityRejected.push({
+          id: q.id,
+          reason: "問題文に不適切な表現（修正不可）",
+        });
         continue;
       }
       if (q.choices.length !== 4) {
-        qualityRejected.push({ id: q.id, reason: "選択肢が4件ではない/重複排除で欠落" });
+        qualityRejected.push({
+          id: q.id,
+          reason: "選択肢が4件ではない/重複排除で欠落",
+        });
         continue;
       }
       if (q.choices.some((c) => hasProhibitedPhrases(c))) {
-        qualityRejected.push({ id: q.id, reason: "選択肢に不適切な表現（以上すべて等）" });
+        qualityRejected.push({
+          id: q.id,
+          reason: "選択肢に不適切な表現（以上すべて等）",
+        });
         continue;
       }
       if (q.answerIndex < 0 || q.answerIndex > 3) {
@@ -736,14 +817,18 @@ export async function POST(req: NextRequest) {
           .select("id,prompt,category")
           .order("created_at", { ascending: false })
           .limit(1000);
-        return (data || []) as { id: string; prompt: string; category: string }[];
+        return (data || []) as {
+          id: string;
+          prompt: string;
+          category: string;
+        }[];
       } catch {
         return [] as { id: string; prompt: string; category: string }[];
       }
     }
 
     const existing = await fetchExistingPromptsAll();
-    const DUP_THRESHOLD = 0.60; // わずかに厳格化
+    const DUP_THRESHOLD = 0.6; // わずかに厳格化
 
     // バッチ内重複の除外（先に近似をはねる）
     const batchKept: typeof out = [];
@@ -758,9 +843,16 @@ export async function POST(req: NextRequest) {
       return inter; // 3以上でほぼ同一
     }
     for (const q of qualityKept) {
-      const hit = batchKept.some((k) => dice(q.prompt, k.prompt) >= BATCH_THRESHOLD || choiceOverlap(q.choices, k.choices) >= 3);
+      const hit = batchKept.some(
+        (k) =>
+          dice(q.prompt, k.prompt) >= BATCH_THRESHOLD ||
+          choiceOverlap(q.choices, k.choices) >= 3
+      );
       if (hit) {
-        batchDupRejected.push({ id: q.id, reason: "バッチ内で類似（重複の可能性）" });
+        batchDupRejected.push({
+          id: q.id,
+          reason: "バッチ内で類似（重複の可能性）",
+        });
       } else {
         batchKept.push(q);
       }
@@ -769,7 +861,9 @@ export async function POST(req: NextRequest) {
     const kept: typeof out = [];
     const dupRejected: any[] = [];
     for (const q of batchKept) {
-      const isDup = existing.some((e) => dice(q.prompt, e.prompt) >= DUP_THRESHOLD);
+      const isDup = existing.some(
+        (e) => dice(q.prompt, e.prompt) >= DUP_THRESHOLD
+      );
       if (isDup) {
         dupRejected.push({ id: q.id, reason: "既存と類似（重複の可能性）" });
       } else {
@@ -820,26 +914,47 @@ export async function POST(req: NextRequest) {
       if (ev.text && ev.text.length > 0) {
         // 事前にエビデンス本文と正誤選択肢の突き合わせ（簡易）
         const normTxt = (ev.text || "").toLowerCase().replace(/\s+/g, "");
-        const correct = (q.choices?.[q.answerIndex] || "").toLowerCase().replace(/\s+/g, "");
-        const distractors = (q.choices || []).filter((_: any, i: number) => i !== q.answerIndex);
+        const correct = (q.choices?.[q.answerIndex] || "")
+          .toLowerCase()
+          .replace(/\s+/g, "");
+        const distractors = (q.choices || []).filter(
+          (_: any, i: number) => i !== q.answerIndex
+        );
         const wrongHit = distractors.some((c: string) =>
           normTxt.includes((c || "").toLowerCase().replace(/\s+/g, ""))
         );
         const correctHit = correct ? normTxt.includes(correct) : false;
         if (!correctHit && wrongHit) {
-          return { pass: false, reason: "エビデンスに誤答のみ含まれる/正解が見当たらない" };
+          return {
+            pass: false,
+            reason: "エビデンスに誤答のみ含まれる/正解が見当たらない",
+          };
         }
         const urlV = "https://api.openai.com/v1/responses";
         const payloadV: any = {
           model: "gpt-5-nano",
           input:
-            `以下のエビデンスの範囲で、クイズの正解が事実として支持されるか判定してください。エビデンスにない推測は不可。\n` +
-            `【クイズ】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(
-              ", "
-            )}\n正解インデックス: ${q.answerIndex}\n` +
-            `【エビデンス（Wikipedia要約）】\n${ev.text}\n` +
-            `出力はJSONのみ: {\"pass\": boolean, \"reason\": string, \"source_url\"?: string}`,
-          max_output_tokens: 400,
+            `あなたはクイズ問題のファクトチェックAIです。以下のクイズ項目を一般的に知られる科学的・教育的知識（例：Wikipedia、教科書、信頼性の高いニュースなど）の範囲で検証してください。` +
+            `\n\n出力は必ず以下のJSON構造で、コードフェンスや説明を含めないでください。` +
+            `\n{` +
+            `\n  "pass": boolean, // 問題が正確であればtrue` +
+            `\n  "reason": string, // 判定理由（簡潔に）` +
+            `\n  "source_url": string | null, // 可能なら出典URL` +
+            `\n  "fixed": object | null // 必要最小限の修正案 (prompt, choices, answerIndex, explanation, category のいずれか)` +
+            `\n}` +
+            `\n\n注意事項:` +
+            `\n- 数値問題は±5%の誤差を許容` +
+            `\n- 「約」「およそ」などの曖昧表現は容認` +
+            `\n- 出典が不明な場合は source_url を null にする` +
+            `\n- JSON以外の出力は禁止` +
+            `\n\n【クイズ】` +
+            `\n問題: ${q.prompt}` +
+            `\n選択肢: ${q.choices.join(", ")}` +
+            `\n正解インデックス: ${q.answerIndex}` +
+            `\nカテゴリ: ${q.category}` +
+            (ev.text ? `\n\n【エビデンス（Wikipedia要約）】\n${ev.text}` : ``) +
+            `\n\nJSON以外の出力は禁止。`,
+          max_output_tokens: budget,
           text: {
             verbosity: "low",
             format: {
@@ -852,12 +967,19 @@ export async function POST(req: NextRequest) {
                 properties: {
                   pass: { type: "boolean" },
                   reason: { type: "string" },
-                  source_url: { type: "string" },
                 },
               },
             },
           },
         };
+        try {
+          await logJsonLine("gpt_request", {
+            purpose: "generate-batch:verify-with-sources",
+            id: q.id,
+            model: payloadV.model,
+            schemaName: payloadV.text?.format?.name ?? null,
+          });
+        } catch {}
         const r = await fetch(urlV, {
           method: "POST",
           headers: {
@@ -868,19 +990,38 @@ export async function POST(req: NextRequest) {
         });
         try {
           const t = await r.text();
+          try {
+            const reqId =
+              r.headers.get("x-request-id") ||
+              r.headers.get("openai-organization-request-id") ||
+              null;
+            await logJsonLine("gpt_response", {
+              purpose: "generate-batch:verify-with-sources",
+              status: r.status,
+              requestId: reqId,
+              raw: t.slice(0, 20000),
+              id: q.id,
+            });
+          } catch {}
           const j = JSON.parse(t);
           const out = Array.isArray(j.output) ? j.output : [];
           for (const e of out) {
             const c = e?.content?.[0];
             if (c?.type === "json" && c.json) {
-              if (!c.json.source_url && ev.urls?.length)
-                c.json.source_url = ev.urls[0];
+              try {
+                if (!c.json.source_url && ev.urls?.length)
+                  c.json.source_url = ev.urls[0];
+                gptDebug[q.id] = gptDebug[q.id] || {};
+                gptDebug[q.id].verifyWithSources = c.json;
+              } catch {}
               return c.json;
             }
             if (c?.type === "output_text" && typeof c.text === "string") {
               try {
                 const v = JSON.parse(c.text);
                 if (!v.source_url && ev.urls?.length) v.source_url = ev.urls[0];
+                gptDebug[q.id] = gptDebug[q.id] || {};
+                gptDebug[q.id].verifyWithSources = v;
                 return v;
               } catch {}
             }
@@ -895,13 +1036,25 @@ export async function POST(req: NextRequest) {
       const payloadV: any = {
         model: "gpt-5-nano",
         input:
-          `次のクイズ項目が事実に基づき正しいか検証してください。\n` +
-          `問題: ${q.prompt}\n` +
-          `選択肢: ${q.choices.join(", ")}\n` +
-          `正解インデックス: ${q.answerIndex}\n` +
-          `カテゴリ: ${q.category}\n` +
-          `出力はJSONのみ: {\"pass\": boolean, \"reason\": string, \"source_url\"?: string}`,
-        max_output_tokens: 400,
+          `あなたはクイズ問題のファクトチェックAIです。以下のクイズ項目を一般的に知られる科学的・教育的知識（例：Wikipedia、教科書、信頼性の高いニュースなど）の範囲で検証してください。` +
+          `\n\n出力は必ず以下のJSON構造で、コードフェンスや説明を含めないでください。` +
+          `\n{` +
+          `\n  "pass": boolean, // 問題が正確であればtrue` +
+          `\n  "reason": string, // 判定理由（簡潔に）` +
+          `\n  "source_url": string | null, // 可能なら出典URL` +
+          `\n  "fixed": object | null // 必要最小限の修正案 (prompt, choices, answerIndex, explanation, category のいずれか)` +
+          `\n}` +
+          `\n\n注意事項:` +
+          `\n- 数値問題は±5%の誤差を許容` +
+          `\n- 「約」「およそ」などの曖昧表現は容認` +
+          `\n- 出典が不明な場合は source_url を null にする` +
+          `\n- JSON以外の出力は禁止` +
+          `\n\n問題: ${q.prompt}` +
+          `\n選択肢: ${q.choices.join(", ")}` +
+          `\n送られた正解インデックス: ${q.answerIndex}` +
+          `\nカテゴリ: ${q.category}` +
+          `\n\nJSON以外の出力は禁止。`,
+        max_output_tokens: budget,
         text: {
           verbosity: "low",
           format: {
@@ -914,12 +1067,19 @@ export async function POST(req: NextRequest) {
               properties: {
                 pass: { type: "boolean" },
                 reason: { type: "string" },
-                source_url: { type: "string" },
               },
             },
           },
         },
       };
+      try {
+        await logJsonLine("gpt_request", {
+          purpose: "generate-batch:verify-question",
+          id: q.id,
+          model: payloadV.model,
+          schemaName: payloadV.text?.format?.name ?? null,
+        });
+      } catch {}
       const r = await fetch(urlV, {
         method: "POST",
         headers: {
@@ -930,14 +1090,36 @@ export async function POST(req: NextRequest) {
       });
       const t = await r.text();
       try {
+        try {
+          const reqId =
+            r.headers.get("x-request-id") ||
+            r.headers.get("openai-organization-request-id") ||
+            null;
+          await logJsonLine("gpt_response", {
+            purpose: "generate-batch:verify-question",
+            status: r.status,
+            requestId: reqId,
+            raw: t.slice(0, 20000),
+            id: q.id,
+          });
+        } catch {}
         const j = JSON.parse(t);
         const out = Array.isArray(j.output) ? j.output : [];
         for (const e of out) {
           const c = e?.content?.[0];
-          if (c?.type === "json" && c.json) return c.json;
+          if (c?.type === "json" && c.json) {
+            try {
+              gptDebug[q.id] = gptDebug[q.id] || {};
+              gptDebug[q.id].verifyQuestion = c.json;
+            } catch {}
+            return c.json;
+          }
           if (c?.type === "output_text" && typeof c.text === "string") {
             try {
-              return JSON.parse(c.text);
+              const parsed = JSON.parse(c.text);
+              gptDebug[q.id] = gptDebug[q.id] || {};
+              gptDebug[q.id].verifyQuestion = parsed;
+              return parsed;
             } catch {}
           }
         }
@@ -945,40 +1127,163 @@ export async function POST(req: NextRequest) {
       return { pass: true, reason: "fallback" };
     }
 
+    async function validateAndFixWithSources(q: any) {
+      try {
+        const ev = await fetchWikiEvidence(q.prompt);
+        const url = "https://api.openai.com/v1/responses";
+        const payload: any = {
+          model: "gpt-5-nano",
+          input:
+            `あなたはクイズ問題のファクトチェックAIです。以下のクイズ項目を一般的に知られる科学的・教育的知識（例：Wikipedia、教科書、信頼性の高いニュースなど）の範囲で検証してください。` +
+            `\n\n出力は必ず以下のJSON構造で、コードフェンスや説明を含めないでください。` +
+            `\n{` +
+            `\n  "pass": boolean, // 問題が正確であればtrue` +
+            `\n  "reason": string, // 判定理由（簡潔に）` +
+            `\n  "source_url": string | null, // 可能なら出典URL` +
+            `\n  "fixed": object | null // 必要最小限の修正案 (prompt, choices, answerIndex, explanation, category のいずれか)` +
+            `\n}` +
+            `\n\n注意事項:` +
+            `\n- 数値問題は±5%の誤差を許容` +
+            `\n- 「約」「およそ」などの曖昧表現は容認` +
+            `\n- 出典が不明な場合は source_url を null にする` +
+            `\n- JSON以外の出力は禁止` +
+            `\n\n【クイズ】` +
+            `\n問題: ${q.prompt}` +
+            `\n選択肢: ${q.choices.join(", ")}` +
+            `\n正解インデックス: ${q.answerIndex}` +
+            `\nカテゴリ: ${q.category}` +
+            (ev?.text
+              ? `\n\n【エビデンス（Wikipedia要約）】\n${ev.text}`
+              : ``) +
+            `\n\nJSON以外の出力は禁止。`,
+          max_output_tokens: budget,
+          text: {
+            verbosity: "low",
+            format: {
+              type: "json_schema",
+              name: "verdict",
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["pass", "reason"],
+                properties: {
+                  pass: { type: "boolean" },
+                  reason: { type: "string" },
+                },
+              },
+            },
+          },
+        };
+        await logJsonLine("gpt_request", {
+          purpose: "generate-batch:validate-and-fix",
+          id: q.id,
+          model: "gpt-5-nano",
+        });
+        const r = await fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        const t = await r.text();
+        try {
+          const j = JSON.parse(t);
+          try {
+            const reqId =
+              r.headers.get("x-request-id") ||
+              r.headers.get("openai-organization-request-id") ||
+              null;
+            await logJsonLine("gpt_response", {
+              purpose: "generate-batch:validate-and-fix",
+              status: r.status,
+              requestId: reqId,
+              raw: t.slice(0, 20000),
+              id: q.id,
+            });
+          } catch {}
+          const out = Array.isArray(j.output) ? j.output : [];
+          for (const e of out) {
+            const c = e?.content?.[0];
+            if (c?.type === "json" && c.json) {
+              try {
+                gptDebug[q.id] = gptDebug[q.id] || {};
+                gptDebug[q.id].validateAndFix = c.json;
+              } catch {}
+              return c.json;
+            }
+            if (c?.type === "output_text" && typeof c.text === "string") {
+              try {
+                const parsed = JSON.parse(c.text);
+                gptDebug[q.id] = gptDebug[q.id] || {};
+                gptDebug[q.id].validateAndFix = parsed;
+                return parsed;
+              } catch {}
+            }
+          }
+        } catch {}
+      } catch {}
+      return { pass: true, reason: "fallback" } as any;
+    }
+
     const verified: any[] = [];
-    const rejected: any[] = [...qualityRejected, ...batchDupRejected, ...dupRejected];
+    const rejected: any[] = [
+      ...qualityRejected,
+      ...batchDupRejected,
+      ...dupRejected,
+    ];
     for (const q of toVerify) {
       try {
-        const v = await verifyWithSources(q);
-        if (v && v.pass) {
+        const v = await validateAndFixWithSources(q);
+        let useQ = { ...q };
+        if (v?.fixed && typeof v.fixed === "object") {
+          if (typeof v.fixed.prompt === "string") useQ.prompt = v.fixed.prompt;
+          if (Array.isArray(v.fixed.choices) && v.fixed.choices.length === 4)
+            useQ.choices = v.fixed.choices;
+          if (Number.isInteger(v.fixed.answerIndex))
+            useQ.answerIndex = v.fixed.answerIndex as number;
+          if (typeof v.fixed.explanation === "string")
+            useQ.explanation = v.fixed.explanation;
+          if (typeof v.fixed.category === "string")
+            useQ.category = v.fixed.category;
+        }
+        let verdict = v;
+        if (!verdict?.pass && v?.fixed) {
+          // 再検証
+          verdict = await verifyQuestion(useQ);
+        }
+        if (verdict && verdict.pass) {
           verified.push({
-            ...q,
+            ...useQ,
             verified: true,
             verified_at: new Date().toISOString(),
-            verify_notes: v.reason,
-            source_url: v.source_url ?? null,
+            verify_notes: verdict.reason,
+            source_url: verdict.source_url ?? null,
           });
         } else {
-          rejected.push({ id: q.id, reason: v?.reason ?? "検証失敗" });
+          rejected.push({ id: q.id, reason: verdict?.reason ?? "検証失敗" });
         }
       } catch {
         rejected.push({ id: q.id, reason: "検証エラー" });
       }
     }
     if (dryRun) {
-      try {
-        console.log(
-          "[generate-batch] dry-run items preview:",
-          out
-            .slice(0, 2)
-            .map((q) => ({ id: q.id, prompt: q.prompt.slice(0, 30) }))
-        );
-      } catch {}
+      // dry-run preview logging removed; use structured log via logJsonLine if needed
+      await logJsonLine("gpt_job_done", {
+        endpoint: "/api/admin/generate-batch",
+        dryRun: true,
+        kept: verified.length,
+        verified: verified.length,
+        rejected: rejected.length,
+      });
       return json(
         {
           items: verified,
           rejected: rejected,
-          ...(debugFlag ? { requestId: (res1 as any).requestId } : {}),
+          ...(debugFlag
+            ? { requestId: (res1 as any).requestId, gpt_debug: gptDebug }
+            : {}),
         },
         200
       );
@@ -997,29 +1302,29 @@ export async function POST(req: NextRequest) {
       difficulty: q.difficulty,
       source: q.source,
     }));
-    try {
-      console.log("[generate-batch] upsert begin", { rows: rows.length });
-    } catch {}
+    // upsert begin logging removed; gpt_job_done will record counts
     const { data, error } = await supabase
       .from("questions")
       .insert(rows)
       .select("id");
     if (error) {
-      try {
-        console.log("[generate-batch] upsert error:", error.message);
-      } catch {}
       return json({ error: error.message }, 500);
     }
-    try {
-      console.log("[generate-batch] upsert success", {
-        inserted: data?.length ?? 0,
-      });
-    } catch {}
+    await logJsonLine("gpt_job_done", {
+      endpoint: "/api/admin/generate-batch",
+      dryRun: false,
+      inserted: data?.length ?? 0,
+      kept: verified.length,
+      verified: verified.length,
+      rejected: rejected.length,
+    });
     return json(
       {
         inserted: data?.length ?? 0,
         ids: data?.map((d: any) => d.id) ?? [],
-        ...(debugFlag ? { requestId: (res1 as any).requestId } : {}),
+        ...(debugFlag
+          ? { requestId: (res1 as any).requestId, gpt_debug: gptDebug }
+          : {}),
       },
       200
     );

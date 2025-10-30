@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 export const runtime = "nodejs";
-
+const budget = 1200;
 const ReqSchema = z.object({
   genre: z.string().min(1),
   count: z.number().int().min(1).max(20).default(6),
@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
   const payload = {
     model: "gpt-5-nano",
     input: `${system}\n\n${user}`,
-    max_output_tokens: 1800,
+    max_output_tokens: budget,
     reasoning: { effort: "low" as const },
   } as const;
 

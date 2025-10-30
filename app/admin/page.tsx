@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useMemo, useState } from "react";
 import Select from "@/components/Select";
 import { z } from "zod";
@@ -164,6 +164,9 @@ export default function AdminPage() {
     )
   );
   const [rawResult, setRawResult] = useState<string>("");
+  const [logs, setLogs] = useState<any[] | null>(null);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsFilter, setLogsFilter] = useState("");
 
   function resetForm() {
     setPrompt("");
@@ -225,10 +228,14 @@ export default function AdminPage() {
             ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
             : {}),
         },
-        body: JSON.stringify({ slug: newCatSlug.trim(), label: newCatLabel.trim() }),
+        body: JSON.stringify({
+          slug: newCatSlug.trim(),
+          label: newCatLabel.trim(),
+        }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+      if (!r.ok)
+        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
       setInfo(`カテゴリーを追加しました: ${data.item?.label || newCatLabel}`);
       setNewCatSlug("");
       setNewCatLabel("");
@@ -458,6 +465,33 @@ export default function AdminPage() {
     }
   }
 
+  async function fetchLogs() {
+    setLogsLoading(true);
+    setError(null);
+    try {
+      const qs = new URLSearchParams();
+      qs.set("limit", "200");
+      if (logsFilter.trim()) qs.set("filter", logsFilter.trim());
+      const r = await fetch(`/api/admin/logs?${qs.toString()}`, {
+        headers: {
+          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
+            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
+            : {}),
+        },
+      });
+      const data = await r.json();
+      if (!r.ok)
+        throw new Error(
+          data?.error || `ログ取得に失敗しました (HTTP ${r.status})`
+        );
+      setLogs(data.items || []);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
   async function sendTestPrompt() {
     setTesting(true);
     setError(null);
@@ -547,7 +581,9 @@ export default function AdminPage() {
         <div className="font-semibold">カテゴリー管理</div>
         <div className="grid sm:grid-cols-3 gap-3 items-end">
           <div>
-            <label className="block text-sm mb-1">スラッグ（英数字・ハイフン）</label>
+            <label className="block text-sm mb-1">
+              スラッグ（英数字・ハイフン）
+            </label>
             <input
               className="w-full bg-transparent border border-white/10 rounded-md p-2"
               placeholder="例: doraemon"
@@ -565,10 +601,76 @@ export default function AdminPage() {
             />
           </div>
           <div>
-            <button className="btn btn-primary w-full" onClick={addCategory} disabled={addingCategory}>
+            <button
+              className="btn btn-primary w-full"
+              onClick={addCategory}
+              disabled={addingCategory}
+            >
               {addingCategory ? "追加中..." : "カテゴリー追加"}
             </button>
           </div>
+        </div>
+      </div>
+      <div className="card p-5 grid gap-4">
+        <div className="font-semibold">システムログ (gpt.log)</div>
+        <div className="grid sm:grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="block text-sm mb-1">
+              フィルタ (purpose/event/任意テキスト)
+            </label>
+            <input
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              value={logsFilter}
+              onChange={(e) => setLogsFilter(e.target.value)}
+            />
+          </div>
+          <div>
+            <button
+              className="btn btn-primary w-full"
+              onClick={fetchLogs}
+              disabled={logsLoading}
+            >
+              {logsLoading ? "取得中..." : "ログ取得"}
+            </button>
+          </div>
+          <div>
+            <button
+              className="btn"
+              onClick={() => {
+                setLogs(null);
+                setLogsFilter("");
+              }}
+            >
+              クリア
+            </button>
+          </div>
+        </div>
+        <div>
+          {logs === null ? (
+            <div className="text-sm text-white/60">
+              ログを取得してください（管理トークンが必要）。
+            </div>
+          ) : (
+            <div className="overflow-auto max-h-96 bg-black/40 rounded p-2">
+              {logs.length === 0 ? (
+                <div className="text-sm text-white/60">
+                  該当するログがありません。
+                </div>
+              ) : (
+                logs.map((l, i) => (
+                  <div key={i} className="mb-2 border-b border-white/5 pb-2">
+                    <div className="text-xs text-white/60">
+                      {l.ts} — {l.event}{" "}
+                      {l.data?.purpose ? "// " + l.data.purpose : ""}
+                    </div>
+                    <pre className="text-xs whitespace-pre-wrap">
+                      {JSON.stringify(l.data, null, 2)}
+                    </pre>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </div>
 
