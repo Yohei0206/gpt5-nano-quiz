@@ -582,19 +582,7 @@ export default function AdminPage() {
       setInfo(`トピックを追加しました: ${data.item?.label || newTopicLabel}`);
       setNewTopicSlug("");
       setNewTopicLabel("");
-      // refresh topics
-      try {
-        setTopLoading(true);
-        const r2 = await fetch("/api/topics", { cache: "no-store" });
-        const j2 = await r2.json();
-        if (r2.ok && Array.isArray(j2?.items))
-          setTopics(
-            j2.items.map((x: any) => ({ slug: x.slug, label: x.label }))
-          );
-      } catch {
-      } finally {
-        setTopLoading(false);
-      }
+      // トピック追加後の即時反映は現UIでは未使用のためスキップ
     } catch (e) {
       setError((e as Error).message);
     } finally {
