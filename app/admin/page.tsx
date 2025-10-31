@@ -4,107 +4,15 @@ import Select from "@/components/Select";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
 
-// 固定カテゴリ + サブジャンル
+// 固定カテゴリ + サブジャンル（旧仕様）
+// 現在はDBから取得するため空にする
 const categories: {
   slug: string;
   label: string;
   subgenres: { slug: string; label: string }[];
-}[] = [
-  {
-    slug: "general",
-    label: "一般教養",
-    subgenres: [
-      { slug: "history", label: "歴史" },
-      { slug: "geography", label: "地理" },
-      { slug: "literature", label: "文学" },
-    ],
-  },
-  {
-    slug: "science",
-    label: "理系・科学",
-    subgenres: [
-      { slug: "math", label: "数学" },
-      { slug: "chemistry", label: "化学" },
-      { slug: "biology", label: "生物" },
-      { slug: "astronomy", label: "天文" },
-    ],
-  },
-  {
-    slug: "entertainment",
-    label: "文化・エンタメ",
-    subgenres: [
-      { slug: "anime", label: "アニメ" },
-      { slug: "movie", label: "映画" },
-      { slug: "game", label: "ゲーム" },
-      { slug: "music", label: "音楽" },
-    ],
-  },
-  {
-    slug: "otaku",
-    label: "アニメ・ゲーム・漫画",
-    subgenres: [
-      { slug: "anime", label: "アニメ" },
-      { slug: "game", label: "ゲーム" },
-      { slug: "manga", label: "漫画" },
-    ],
-  },
-  {
-    slug: "jojo",
-    label: "ジョジョの奇妙な冒険",
-    subgenres: [],
-  },
-  {
-    slug: "hunter-hunter",
-    label: "HUNTER×HUNTER[漫画]",
-    subgenres: [],
-  },
-  {
-    slug: "doraemon",
-    label: "ドラえもん",
-    subgenres: [],
-  },
-  {
-    slug: "trivia",
-    label: "雑学",
-    subgenres: [
-      { slug: "food", label: "食" },
-      { slug: "vehicle", label: "乗り物" },
-      { slug: "business", label: "企業" },
-      { slug: "animal", label: "動物" },
-      { slug: "daily", label: "日常知識" },
-    ],
-  },
-  {
-    slug: "japan",
-    label: "日本",
-    subgenres: [
-      { slug: "japanese-history", label: "日本史" },
-      { slug: "culture", label: "文化" },
-      { slug: "dialect", label: "方言" },
-      { slug: "tourism", label: "観光地" },
-    ],
-  },
-  {
-    slug: "world",
-    label: "世界",
-    subgenres: [
-      { slug: "world-history", label: "世界史" },
-      { slug: "world-geography", label: "世界地理" },
-      { slug: "flags", label: "国旗" },
-      { slug: "culture", label: "文化" },
-    ],
-  },
-  {
-    slug: "society",
-    label: "時事・社会",
-    subgenres: [
-      { slug: "politics", label: "政治" },
-      { slug: "economy", label: "経済" },
-      { slug: "it", label: "ITニュース" },
-    ],
-  },
-];
+}[] = [];
 type CategoryItem = { slug: string; label: string };
+type TopicItem = { slug: string; label: string; category?: string | null };
 
 const QuestionSchema = z.object({
   id: z.string(),
@@ -150,6 +58,7 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
   const [genGenre, setGenGenre] = useState<string>("trivia");
   const [genTitle, setGenTitle] = useState<string>("");
+  const [genTitleSlug, setGenTitleSlug] = useState<string>("");
   const [genCount, setGenCount] = useState<number>(8);
   const [genDifficulty, setGenDifficulty] = useState<
     "easy" | "normal" | "hard" | "mixed"
@@ -163,6 +72,7 @@ export default function AdminPage() {
   // トピック追加
   const [newTopicSlug, setNewTopicSlug] = useState("");
   const [newTopicLabel, setNewTopicLabel] = useState("");
+  const [topicCatForAdd, setTopicCatForAdd] = useState<string>("");
   const [addingTopic, setAddingTopic] = useState(false);
   // カテゴリー追加用フォーム
   const [newCatSlug, setNewCatSlug] = useState("");
@@ -192,6 +102,10 @@ export default function AdminPage() {
   const [logs, setLogs] = useState<any[] | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsFilter, setLogsFilter] = useState("");
+  // サブジャンル（DB: topics）
+  const [topics, setTopics] = useState<TopicItem[]>([]);
+  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [topicsError, setTopicsError] = useState<string | null>(null);
 
   // Load categories from DB
   useEffect(() => {
@@ -216,6 +130,11 @@ export default function AdminPage() {
               setGenGenre(mapped[0].slug);
             if (!category || !mapped.some((c) => c.slug === category))
               setCategory(mapped[0].slug);
+            if (
+              !topicCatForAdd ||
+              !mapped.some((c) => c.slug === topicCatForAdd)
+            )
+              setTopicCatForAdd(mapped[0].slug);
           }
         }
       } catch (e) {
@@ -228,6 +147,61 @@ export default function AdminPage() {
       alive = false;
     };
   }, []);
+
+  // サブジャンル一覧を読み込み
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setTopicsLoading(true);
+      setTopicsError(null);
+      try {
+        const r = await fetch("/api/topics", { cache: "no-store" });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+        const items = Array.isArray(j?.items) ? j.items : [];
+        const mapped = items.map((x: any) => ({
+          slug: x.slug,
+          label: x.label,
+          category: x.category ?? null,
+        })) as TopicItem[];
+        if (alive) setTopics(mapped);
+      } catch (e) {
+        if (alive) setTopicsError((e as Error).message);
+      } finally {
+        if (alive) setTopicsLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 選択中のサブジャンルに応じて表示用ラベルを同期
+  const selectedGenTopic = useMemo(
+    () =>
+      topics.find(
+        (t) => t.slug === genTitleSlug && (t.category ?? undefined) === genGenre
+      ),
+    [topics, genTitleSlug, genGenre]
+  );
+  useEffect(() => {
+    setGenTitle(selectedGenTopic?.label ?? "");
+  }, [selectedGenTopic]);
+  useEffect(() => {
+    if (!selectedGenTopic) {
+      setGenTitleSlug("");
+      setGenTitle("");
+    }
+  }, [genGenre]);
+
+  // サブジャンルプルダウン用オプション（カテゴリ一致のみ表示）
+  const topicOptions = useMemo(() => {
+    const list = topics.filter((t) => (t.category ?? "") === genGenre);
+    return [
+      { value: "", label: "(未指定)" },
+      ...list.map((t) => ({ value: t.slug, label: t.label })),
+    ];
+  }, [topics, genGenre]);
 
   function resetForm() {
     setPrompt("");
@@ -555,7 +529,11 @@ export default function AdminPage() {
 
   async function addTopic() {
     if (!newTopicSlug.trim() || !newTopicLabel.trim()) {
-      setError("トピックのスラッグと表示名を入力してください");
+      setError("サブジャンルのスラッグと名称を入力してください");
+      return;
+    }
+    if (!topicCatForAdd.trim()) {
+      setError("サブジャンルの所属ジャンルを選択してください");
       return;
     }
     setAddingTopic(true);
@@ -573,16 +551,34 @@ export default function AdminPage() {
         body: JSON.stringify({
           slug: newTopicSlug.trim(),
           label: newTopicLabel.trim(),
-          category: genGenre,
+          category: topicCatForAdd.trim(),
         }),
       });
       const data = await r.json();
       if (!r.ok)
         throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
-      setInfo(`トピックを追加しました: ${data.item?.label || newTopicLabel}`);
+      setInfo(
+        `サブジャンルを追加しました: ${data.item?.label || newTopicLabel}`
+      );
       setNewTopicSlug("");
       setNewTopicLabel("");
-      // トピック追加後の即時反映は現UIでは未使用のためスキップ
+      // 追加後にサブジャンル一覧を再取得
+      try {
+        setTopicsLoading(true);
+        const r2 = await fetch("/api/topics", { cache: "no-store" });
+        const j2 = await r2.json();
+        if (r2.ok && Array.isArray(j2?.items)) {
+          const mapped = j2.items.map((x: any) => ({
+            slug: x.slug,
+            label: x.label,
+            category: x.category ?? null,
+          })) as TopicItem[];
+          setTopics(mapped);
+        }
+      } catch {
+      } finally {
+        setTopicsLoading(false);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -608,109 +604,6 @@ export default function AdminPage() {
           data?.body || data?.error || `失敗しました (HTTP ${r.status})`
         );
       setInfo("OpenAI接続: OK（呼び出し成功）");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  async function fetchLogs() {
-    setLogsLoading(true);
-    setError(null);
-    try {
-      const qs = new URLSearchParams();
-      qs.set("limit", "200");
-      if (logsFilter.trim()) qs.set("filter", logsFilter.trim());
-      const r = await fetch(`/api/admin/logs?${qs.toString()}`, {
-        headers: {
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-      });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(
-          data?.error || `ログ取得に失敗しました (HTTP ${r.status})`
-        );
-      setLogs(data.items || []);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLogsLoading(false);
-    }
-  }
-
-  async function sendTestPrompt() {
-    setTesting(true);
-    setError(null);
-    setInfo(null);
-    setTestResult("");
-    try {
-      const r = await fetch("/api/admin/test-prompt", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({
-          prompt: testPrompt,
-          maxTokens: testMaxTokens,
-          extractJson: testExtractJson,
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok || !data.ok)
-        throw new Error(
-          data?.body || data?.error || `失敗しました (HTTP ${r.status})`
-        );
-      const out =
-        testExtractJson && data.extracted ? data.extracted : data.content;
-      setTestResult(
-        typeof out === "string" ? out : JSON.stringify(out, null, 2)
-      );
-      setInfo("テストプロンプト送信: 成功");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  async function sendRawPayload() {
-    setTesting(true);
-    setError(null);
-    setInfo(null);
-    setRawResult("");
-    try {
-      let parsed: any;
-      try {
-        parsed = JSON.parse(rawPayload);
-      } catch {
-        throw new Error("RAW JSON が不正です");
-      }
-      const r = await fetch("/api/admin/test-raw", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify(parsed),
-      });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(
-          data?.body?.error?.message ||
-            data?.error ||
-            `失敗しました (HTTP ${r.status})`
-        );
-      setRawResult(JSON.stringify(data, null, 2));
-      setInfo("RAW送信: 成功");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -761,75 +654,13 @@ export default function AdminPage() {
           </div>
         </div>
       </div>
-      <div className="card p-5 grid gap-4">
-        <div className="font-semibold">システムログ (gpt.log)</div>
-        <div className="grid sm:grid-cols-3 gap-3 items-end">
-          <div>
-            <label className="block text-sm mb-1">
-              フィルタ (purpose/event/任意テキスト)
-            </label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              value={logsFilter}
-              onChange={(e) => setLogsFilter(e.target.value)}
-            />
-          </div>
-          <div>
-            <button
-              className="btn btn-primary w-full"
-              onClick={fetchLogs}
-              disabled={logsLoading}
-            >
-              {logsLoading ? "取得中..." : "ログ取得"}
-            </button>
-          </div>
-          <div>
-            <button
-              className="btn"
-              onClick={() => {
-                setLogs(null);
-                setLogsFilter("");
-              }}
-            >
-              クリア
-            </button>
-          </div>
-        </div>
-        <div>
-          {logs === null ? (
-            <div className="text-sm text-white/60">
-              ログを取得してください（管理トークンが必要）。
-            </div>
-          ) : (
-            <div className="overflow-auto max-h-96 bg-black/40 rounded p-2">
-              {logs.length === 0 ? (
-                <div className="text-sm text-white/60">
-                  該当するログがありません。
-                </div>
-              ) : (
-                logs.map((l, i) => (
-                  <div key={i} className="mb-2 border-b border-white/5 pb-2">
-                    <div className="text-xs text-white/60">
-                      {l.ts} — {l.event}{" "}
-                      {l.data?.purpose ? "// " + l.data.purpose : ""}
-                    </div>
-                    <pre className="text-xs whitespace-pre-wrap">
-                      {JSON.stringify(l.data, null, 2)}
-                    </pre>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-      </div>
 
       <div className="card p-5 grid gap-4">
-        <div className="font-semibold">作品タイトル管理</div>
-        <div className="grid sm:grid-cols-3 gap-3 items-end">
+        <div className="font-semibold">サブジャンル管理</div>
+        <div className="grid sm:grid-cols-4 gap-3 items-end">
           <div>
             <label className="block text-sm mb-1">
-              スラッグ（英数字・ハイフン）
+              サブジャンルのスラッグ（英数字・ハイフン）
             </label>
             <input
               className="w-full bg-transparent border border-white/10 rounded-md p-2"
@@ -839,7 +670,7 @@ export default function AdminPage() {
             />
           </div>
           <div>
-            <label className="block text-sm mb-1">表示名</label>
+            <label className="block text-sm mb-1">サブジャンル名</label>
             <input
               className="w-full bg-transparent border border-white/10 rounded-md p-2"
               placeholder="例: ドラゴンボール"
@@ -848,12 +679,23 @@ export default function AdminPage() {
             />
           </div>
           <div>
+            <label className="block text-sm mb-1">所属ジャンル</label>
+            <Select
+              value={topicCatForAdd}
+              onChange={setTopicCatForAdd}
+              options={dbCategories.map((c) => ({
+                value: c.slug,
+                label: c.label,
+              }))}
+            />
+          </div>
+          <div>
             <button
               className="btn btn-primary w-full"
               onClick={addTopic}
               disabled={addingTopic}
             >
-              {addingTopic ? "追加中..." : "トピック追加"}
+              {addingTopic ? "追加中..." : "サブジャンル追加"}
             </button>
           </div>
         </div>
@@ -882,13 +724,20 @@ export default function AdminPage() {
             )}
           </div>
           <div>
-            <label className="block text-sm mb-1">作品タイトル（任意）</label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              placeholder="例: ドラゴンボール / FF7 / ワンピース"
-              value={genTitle}
-              onChange={(e) => setGenTitle(e.target.value)}
+            <label className="block text-sm mb-1">サブジャンル</label>
+            <Select
+              value={genTitleSlug}
+              onChange={(v) => setGenTitleSlug(v)}
+              options={topicOptions}
             />
+            {topicsLoading && (
+              <div className="text-xs text-white/60 mt-1">
+                サブジャンル読込中...
+              </div>
+            )}
+            {topicsError && (
+              <div className="text-xs text-red-400 mt-1">{topicsError}</div>
+            )}
           </div>
           <div>
             <label className="block text-sm mb-1">件数</label>
