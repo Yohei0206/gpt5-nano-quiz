@@ -149,6 +149,7 @@ export default function AdminPage() {
   const [info, setInfo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [genGenre, setGenGenre] = useState<string>("trivia");
+  const [genTitle, setGenTitle] = useState<string>("");
   const [genCount, setGenCount] = useState<number>(8);
   const [genDifficulty, setGenDifficulty] = useState<
     "easy" | "normal" | "hard" | "mixed"
@@ -156,6 +157,13 @@ export default function AdminPage() {
   const [generating, setGenerating] = useState(false);
   const [parallelRunning, setParallelRunning] = useState(false);
   const [parallelCount, setParallelCount] = useState<number>(3);
+  // 回答番号均等化
+  const [rebalanceLimit, setRebalanceLimit] = useState<number>(100);
+  const [rebalancing, setRebalancing] = useState(false);
+  // トピック追加
+  const [newTopicSlug, setNewTopicSlug] = useState("");
+  const [newTopicLabel, setNewTopicLabel] = useState("");
+  const [addingTopic, setAddingTopic] = useState(false);
   // カテゴリー追加用フォーム
   const [newCatSlug, setNewCatSlug] = useState("");
   const [newCatLabel, setNewCatLabel] = useState("");
@@ -196,13 +204,18 @@ export default function AdminPage() {
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
         const items = Array.isArray(j?.items) ? j.items : [];
-        const mapped = items.map((x: any) => ({ slug: x.slug, label: x.label })) as CategoryItem[];
+        const mapped = items.map((x: any) => ({
+          slug: x.slug,
+          label: x.label,
+        })) as CategoryItem[];
         if (alive) {
           setDbCategories(mapped);
           // Initialize selects if current values are not in the new list
           if (mapped.length) {
-            if (!mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
-            if (!category || !mapped.some((c) => c.slug === category)) setCategory(mapped[0].slug);
+            if (!mapped.some((c) => c.slug === genGenre))
+              setGenGenre(mapped[0].slug);
+            if (!category || !mapped.some((c) => c.slug === category))
+              setCategory(mapped[0].slug);
           }
         }
       } catch (e) {
@@ -293,12 +306,18 @@ export default function AdminPage() {
         const r2 = await fetch("/api/categories", { cache: "no-store" });
         const j2 = await r2.json();
         if (r2.ok && Array.isArray(j2?.items)) {
-          const mapped = j2.items.map((x: any) => ({ slug: x.slug, label: x.label })) as CategoryItem[];
+          const mapped = j2.items.map((x: any) => ({
+            slug: x.slug,
+            label: x.label,
+          })) as CategoryItem[];
           setDbCategories(mapped);
-          if (mapped.length && !mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
+          if (mapped.length && !mapped.some((c) => c.slug === genGenre))
+            setGenGenre(mapped[0].slug);
         }
-      } catch {}
-      finally { setCatLoading(false); }
+      } catch {
+      } finally {
+        setCatLoading(false);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -359,6 +378,7 @@ export default function AdminPage() {
           count: genCount,
           difficulty: genDifficulty,
           language: "ja",
+          ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
         }),
       });
       const data = await r.json();
@@ -400,6 +420,7 @@ export default function AdminPage() {
           count: genCount,
           difficulty: genDifficulty,
           language: "ja",
+          ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
         }),
       });
       const data = await r.json();
@@ -439,6 +460,7 @@ export default function AdminPage() {
         count: genCount,
         difficulty: genDifficulty,
         language: "ja",
+        ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
       } as const;
       const headers: Record<string, string> = {
         "content-type": "application/json",
@@ -497,6 +519,86 @@ export default function AdminPage() {
       setError((e as Error).message);
     } finally {
       setLoadingPreview(false);
+    }
+  }
+
+  async function rebalanceAnswers() {
+    setRebalancing(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await fetch("/api/admin/rebalance", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
+            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
+            : {}),
+        },
+        body: JSON.stringify({ category: genGenre, limit: rebalanceLimit }),
+      });
+      const data = await r.json();
+      if (!r.ok)
+        throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
+      setInfo(
+        `回答位置を再配置しました（更新 ${data.updated} 件、分布 ${(
+          data.distribution || []
+        ).join(",")}）。`
+      );
+      await loadPreview();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRebalancing(false);
+    }
+  }
+
+  async function addTopic() {
+    if (!newTopicSlug.trim() || !newTopicLabel.trim()) {
+      setError("トピックのスラッグと表示名を入力してください");
+      return;
+    }
+    setAddingTopic(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await fetch("/api/admin/topics", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
+            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
+            : {}),
+        },
+        body: JSON.stringify({
+          slug: newTopicSlug.trim(),
+          label: newTopicLabel.trim(),
+          category: genGenre,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok)
+        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+      setInfo(`トピックを追加しました: ${data.item?.label || newTopicLabel}`);
+      setNewTopicSlug("");
+      setNewTopicLabel("");
+      // refresh topics
+      try {
+        setTopLoading(true);
+        const r2 = await fetch("/api/topics", { cache: "no-store" });
+        const j2 = await r2.json();
+        if (r2.ok && Array.isArray(j2?.items))
+          setTopics(
+            j2.items.map((x: any) => ({ slug: x.slug, label: x.label }))
+          );
+      } catch {
+      } finally {
+        setTopLoading(false);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAddingTopic(false);
     }
   }
 
@@ -735,6 +837,41 @@ export default function AdminPage() {
       </div>
 
       <div className="card p-5 grid gap-4">
+        <div className="font-semibold">作品タイトル管理</div>
+        <div className="grid sm:grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="block text-sm mb-1">
+              スラッグ（英数字・ハイフン）
+            </label>
+            <input
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              placeholder="例: dragon-ball"
+              value={newTopicSlug}
+              onChange={(e) => setNewTopicSlug(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">表示名</label>
+            <input
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              placeholder="例: ドラゴンボール"
+              value={newTopicLabel}
+              onChange={(e) => setNewTopicLabel(e.target.value)}
+            />
+          </div>
+          <div>
+            <button
+              className="btn btn-primary w-full"
+              onClick={addTopic}
+              disabled={addingTopic}
+            >
+              {addingTopic ? "追加中..." : "トピック追加"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="card p-5 grid gap-4">
         <div className="font-semibold">
           ジャンル指定でGPT生成（直接Supabaseへ保存）
         </div>
@@ -744,7 +881,10 @@ export default function AdminPage() {
             <Select
               value={genGenre}
               onChange={setGenGenre}
-              options={dbCategories.map((c) => ({ value: c.slug, label: c.label }))}
+              options={dbCategories.map((c) => ({
+                value: c.slug,
+                label: c.label,
+              }))}
             />
             {catLoading && (
               <div className="text-xs text-white/60 mt-1">読込中...</div>
@@ -752,6 +892,15 @@ export default function AdminPage() {
             {catError && (
               <div className="text-xs text-red-400 mt-1">{catError}</div>
             )}
+          </div>
+          <div>
+            <label className="block text-sm mb-1">作品タイトル（任意）</label>
+            <input
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              placeholder="例: ドラゴンボール / FF7 / ワンピース"
+              value={genTitle}
+              onChange={(e) => setGenTitle(e.target.value)}
+            />
           </div>
           <div>
             <label className="block text-sm mb-1">件数</label>
@@ -812,6 +961,52 @@ export default function AdminPage() {
           >
             {parallelRunning ? "並列中..." : "並列で生成・保存"}
           </button>
+        </div>
+      </div>
+
+      <div className="card p-5 grid gap-4">
+        <div className="font-semibold">回答番号の一括並び替え（均等化）</div>
+        <div className="grid sm:grid-cols-3 gap-4 items-end">
+          <div>
+            <label className="block text-sm mb-1">対象ジャンル</label>
+            <Select
+              value={genGenre}
+              onChange={setGenGenre}
+              options={dbCategories.map((c) => ({
+                value: c.slug,
+                label: c.label,
+              }))}
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">対象件数（新しい順）</label>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              className="w-full bg-transparent border border-white/10 rounded-md p-2"
+              value={rebalanceLimit}
+              onChange={(e) =>
+                setRebalanceLimit(
+                  Math.max(1, Math.min(500, Number(e.target.value) || 1))
+                )
+              }
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              className="btn btn-primary w-full"
+              onClick={rebalanceAnswers}
+              disabled={rebalancing}
+            >
+              {rebalancing ? "並び替え中..." : "回答位置を均等化"}
+            </button>
+          </div>
+        </div>
+        <div className="text-xs text-white/60">
+          指定ジャンルの直近N件について、正解の位置を 0→1→2→3→…
+          の順で再配置します。
+          問題本文や選択肢内容は変更せず、選択肢の並びのみ入れ替えます。
         </div>
       </div>
     </div>

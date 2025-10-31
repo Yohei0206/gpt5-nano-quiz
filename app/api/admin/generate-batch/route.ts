@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { serverSupabaseService } from "@/lib/supabase";
 import { logJsonLine } from "@/lib/logger";
+import { normalizeForChoiceCompare } from "@/lib/validation";
 
 export const runtime = "nodejs"; // Service Role 使用
 
@@ -10,6 +11,7 @@ const ReqSchema = z.object({
   count: z.number().int().min(1).max(20).default(10),
   difficulty: z.enum(["easy", "normal", "hard", "mixed"]).default("normal"),
   language: z.enum(["ja", "en"]).default("ja"),
+  title: z.string().min(1).max(100).optional(),
 });
 
 // モデル出力を緩めに受けてから正規化
@@ -126,6 +128,12 @@ export async function POST(req: NextRequest) {
     urlObj.searchParams.get("debug") === "1" || !!process.env.DEBUG_GENERATION;
 
   const apiKey = process.env.API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return json(
+      { error: "Missing OpenAI API key (API_KEY or OPENAI_API_KEY)" },
+      500
+    );
+  }
   if (!apiKey) return json({ error: "Missing OpenAI API key" }, 500);
 
   const system = [
@@ -208,34 +216,27 @@ export async function POST(req: NextRequest) {
     `難易度/Difficulty: ${difficulty}`,
     `言語/Language: ${body.language}`,
     `出題数/Count: ${body.count}`,
+    ...(body.title && body.title.trim()
+      ? [`作品/Title: ${body.title.trim()}`]
+      : []),
     "フォーマット厳守: JSON配列のみを返す（itemsラップ不要）。",
-    "各要素の仕様:",
+    "各要素の仕様（最小限で良い）:",
     "- id: 一意な文字列",
-    "- prompt: 200字以内、明確・一意解の設問文",
-    "- choices: 4件。重複/同義不可。単位/範囲/時点は明確に",
+    "- prompt: 180字以内で明確・一意解",
+    "- choices: 4件。重複/同義不可。なるべく短く（単語〜短語）。",
     "- answerIndex: 0..3 の整数（唯一の正解）",
-    "- answerIndex の分布: バッチ内で 0,1,2,3 がなるべく均等に分布するように配慮してください（各インデックスがほぼ同数になることを目指してください）。",
-    "- explanation: 200字以内の簡潔な補足（任意）",
-    "- category: 入力のジャンルをそのまま設定",
-    "- subgenre: 任意（適切なら設定）",
+    "- explanation: 80〜120字。省略可（空文字可）。",
+    "- category: 入力ジャンルのスラッグ",
     "- difficulty: easy|normal|hard（mixed時は各問に適切に付与）",
-    "- source: 'generated:nano' 等の由来",
+    "- source: 'generated:nano' など（省略可）",
     "",
-    "注意: 文頭/文末に余計な文字、コードフェンス、コメント、空配列・件数不足は禁止。",
-    "重複禁止: 同一/ほぼ同一の題材・言い換え・誤差違い（西暦や人数だけ変更）を含めない。サブトピックを分散。",
-    "explanation: 80〜200字程度で、なぜその答えが正しいかを2文構成で説明。",
-    "1文目で事実を明示し、2文目で背景・根拠・補足を述べる。",
-    "単なる理由文でなく、知識として価値のある説明にする。",
-    "内部推論（thinking）:",
-    "各問題を出力する前に、内部的に次の3段階で検討を行うこと。",
-    "1. 問題テーマの焦点を明確化し、設問が一意解となるか確認。",
-    "2. 正答と誤答候補の因果・時代・語義・事実整合性を論理的に検討。",
-    "3. 出力前に内容の自然さ、日本語の表現、整合性を最終確認。",
-    "これらの思考過程は出力に含めない。",
+    "厳守事項: コードフェンス・コメント不要。空配列・件数不足は禁止。",
+    "重複禁止: 同一/ほぼ同一題材や言い換え、数値だけ違う類題を避ける。",
+    "出力をできるだけ簡潔に。choices と explanation を短く。",
   ].join("\n");
 
   const url = "https://api.openai.com/v1/responses";
-  const budget = 1800;
+  const budget = 2400;
   // Collect parsed JSON outputs from review/verify/validate calls for debugging when debugFlag is set
   const gptDebug: Record<string, any> = {};
 
@@ -275,7 +276,7 @@ export async function POST(req: NextRequest) {
                   maxItems: 4,
                 },
                 answerIndex: { type: "integer", minimum: 0, maximum: 3 },
-                explanation: { type: "string", maxLength: 200 },
+                explanation: { type: "string", maxLength: 120 },
                 category: { type: "string" },
                 difficulty: {
                   type: "string",
@@ -296,6 +297,15 @@ export async function POST(req: NextRequest) {
     max_output_tokens: budget,
     reasoning: { effort: "low" as const },
     text: { verbosity: "low" as const, format: buildJsonSchema() },
+  } as const;
+
+  // Fallback payload (no schema) to recover from 400 invalid_json_schema or similar
+  const payloadFallback = {
+    model: "gpt-5-nano",
+    input: `${system}\n\n${user}`,
+    max_output_tokens: budget,
+    reasoning: { effort: "low" as const },
+    text: { verbosity: "low" as const },
   } as const;
 
   async function call(p: any) {
@@ -329,8 +339,10 @@ export async function POST(req: NextRequest) {
       });
     } catch {}
     if (!r.ok) {
-      const e = new Error(`OpenAI error ${r.status}: ${text}`) as any;
-      (e as any).requestId = reqId;
+      const e = new Error(`OpenAI error ${r.status}`) as any;
+      e.requestId = reqId;
+      e.status = r.status;
+      e.raw = text;
       throw e;
     }
     let json: any = null;
@@ -341,8 +353,38 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 1st attempt
-    const res1 = await call(payload);
+    // 1st attempt: no schema (more tolerant)
+    let res1: any;
+    try {
+      await logJsonLine("gpt_request", {
+        purpose: "generate-batch:create:no-schema-first",
+        model: payloadFallback.model,
+      });
+    } catch {}
+    try {
+      res1 = await call(payloadFallback);
+    } catch (e: any) {
+      const raw = e && e.raw ? String(e.raw).toLowerCase() : "";
+      const shouldTrySchema =
+        (e && (e.status === 400 || e.status === 422)) ||
+        raw.includes("invalid_request_error");
+      if (!shouldTrySchema) throw e;
+      try {
+        // Fallback to schema formatting (more constrained) if no-schema fails
+        await logJsonLine("gpt_request", {
+          purpose: "generate-batch:create:fallback-schema",
+          model: payload.model,
+          schemaName: (payload as any)?.text?.format?.name ?? null,
+        });
+      } catch {}
+      res1 = await call(payload);
+      try {
+        gptDebug["_meta"] = {
+          ...(gptDebug["_meta"] || {}),
+          fallbackSchema: true,
+        };
+      } catch {}
+    }
     // retry results are stored here for debugging if all attempts fail
     let res2: any = undefined;
     let res3: any = undefined;
@@ -652,6 +694,13 @@ export async function POST(req: NextRequest) {
       const q = q0;
       // 最終チェック
       if (!isNaturalJapaneseText(q.prompt)) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "日本語として不自然/英語比率過多（修正不可）",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "日本語として不自然/英語比率過多（修正不可）",
@@ -659,6 +708,13 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (hasProhibitedPhrases(q.prompt)) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "問題文に不適切な表現（修正不可）",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "問題文に不適切な表現（修正不可）",
@@ -666,6 +722,13 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (q.choices.length !== 4) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "選択肢が4件ではない/重複排除で欠落",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "選択肢が4件ではない/重複排除で欠落",
@@ -673,6 +736,13 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (q.choices.some((c) => hasProhibitedPhrases(c))) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "選択肢に不適切な表現（以上すべて等）",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "選択肢に不適切な表現（以上すべて等）",
@@ -680,10 +750,24 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (q.answerIndex < 0 || q.answerIndex > 3) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "正解インデックス不正",
+          });
+        } catch {}
         qualityRejected.push({ id: q.id, reason: "正解インデックス不正" });
         continue;
       }
       if (q.choices.some((c) => c.length > 60)) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "選択肢が長すぎる",
+          });
+        } catch {}
         qualityRejected.push({ id: q.id, reason: "選択肢が長すぎる" });
         continue;
       }
@@ -761,6 +845,13 @@ export async function POST(req: NextRequest) {
           choiceOverlap(q.choices, k.choices) >= 3
       );
       if (hit) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "dedup_batch",
+            id: q.id,
+            reason: "バッチ内で類似（重複の可能性）",
+          });
+        } catch {}
         batchDupRejected.push({
           id: q.id,
           reason: "バッチ内で類似（重複の可能性）",
@@ -777,6 +868,13 @@ export async function POST(req: NextRequest) {
         (e) => dice(q.prompt, e.prompt) >= DUP_THRESHOLD
       );
       if (isDup) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "dedup_existing",
+            id: q.id,
+            reason: "既存と類似（重複の可能性）",
+          });
+        } catch {}
         dupRejected.push({ id: q.id, reason: "既存と類似（重複の可能性）" });
       } else {
         kept.push(q);
@@ -950,31 +1048,19 @@ export async function POST(req: NextRequest) {
     }
 
     async function verifyQuestion(q: any) {
-      // 検証方式: 問題文のみを投げて、GPTの回答語句を受け取り、
-      // その回答が選択肢に含まれていれば合格とする。
+      // 検証方式: 問題文のみを投げて、GPTの回答語句（プレーン）を受け取る
       const urlV = "https://api.openai.com/v1/responses";
       const payloadV: any = {
         model: "gpt-5-nano",
         input:
-          `次の四択クイズの正解に該当する語句を1つだけ答えてください。` +
-          `\n- 回答はできるだけ短く、選択肢と同じ語句で返してください。` +
-          `\n- 解説や前後の文章、コードフェンスは禁止。` +
-          `\n- 出力はJSONのみで、{\"answer\": string} の形で返してください。` +
+          `クイズの正解に回答してください` +
+          `\n- 回答はできるだけ短く、回答のみを返してください。` +
+          `\n- 元の問題は4択ですが、選択肢は提示しません。` +
+          `\n- 句読点・引用符・記号は付けない。1語または短い名詞句。` +
           `\n\n問題: ${q.prompt}`,
-        max_output_tokens: 200,
-        text: {
-          verbosity: "low",
-          format: {
-            type: "json_schema",
-            name: "answer",
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              required: ["answer"],
-              properties: { answer: { type: "string" } },
-            },
-          },
-        },
+        max_output_tokens: 600,
+        reasoning: { effort: "low" },
+        text: { verbosity: "low" },
       };
       try {
         await logJsonLine("gpt_request", {
@@ -994,6 +1080,13 @@ export async function POST(req: NextRequest) {
       });
       const t = await r.text();
       try {
+        await logJsonLine("verify_raw", {
+          id: q.id,
+          status: r.status,
+          raw: t,
+        });
+      } catch {}
+      try {
         try {
           const reqId =
             r.headers.get("x-request-id") ||
@@ -1012,47 +1105,75 @@ export async function POST(req: NextRequest) {
         let answer: string | null = null;
         for (const e of out) {
           const c = e?.content?.[0];
-          if (c?.type === "json" && c.json && typeof c.json.answer === "string") {
+          if (c?.type === "output_text" && typeof c.text === "string") {
+            answer = String(c.text).trim();
+            break;
+          }
+          if (
+            c?.type === "json" &&
+            c.json &&
+            typeof c.json.answer === "string"
+          ) {
             answer = c.json.answer as string;
             break;
           }
-          if (c?.type === "output_text" && typeof c.text === "string") {
-            try {
-              const parsed = JSON.parse(c.text);
-              if (typeof parsed?.answer === "string") {
-                answer = parsed.answer as string;
-                break;
-              }
-            } catch {}
-          }
         }
-        // 判定: 選択肢に含まれているか（インデックスは無視し、語句一致のみ）
+        // 回答が取得できない場合のデバッグログ
+        if (typeof answer !== "string") {
+          try {
+            const types = out.map((e: any) => e?.content?.[0]?.type ?? null);
+            await logJsonLine("verify_answer_missing", {
+              id: q.id,
+              outputTypes: types,
+              rawHead: String(t).slice(0, 200),
+            });
+          } catch {}
+          return { pass: false, reason: "回答取得に失敗" };
+        }
+
+        // 判定: 選択肢に含まれているか（同一語句一致）
         if (typeof answer === "string") {
-          const normStr = (s: string) =>
-            normalizeJa(s).toLowerCase().replace(/[\s、,。\.]/g, "");
-          const ans = normStr(answer);
+          const ans = normalizeForChoiceCompare(answer);
           const choices = (q.choices || []) as string[];
-          const normChoices = choices.map((c) => normStr(c));
+          const normChoices = choices.map((c) => normalizeForChoiceCompare(c));
           const hitIdx = normChoices.findIndex((c) => c === ans);
           if (hitIdx < 0) {
+            try {
+              gptDebug[q.id] = gptDebug[q.id] || {};
+              gptDebug[q.id].verifyDecision = {
+                answer,
+                hitIndex: -1,
+                expectedIndex: q.answerIndex,
+              };
+            } catch {}
             return { pass: false, reason: "選択肢に一致する回答なし" };
           }
-          // 生成時の正解インデックスと一致した選択肢のインデックスが同じ場合のみ合格
-          if (Number.isInteger(q.answerIndex) && hitIdx === q.answerIndex) {
-            return {
-              pass: true,
-              reason: `一致インデックスOK (hit=${hitIdx}, expected=${q.answerIndex})`,
+          const pass =
+            Number.isInteger(q.answerIndex) && hitIdx === q.answerIndex;
+          try {
+            gptDebug[q.id] = gptDebug[q.id] || {};
+            gptDebug[q.id].verifyDecision = {
+              answer,
+              hitIndex: hitIdx,
+              expectedIndex: q.answerIndex,
+              pass,
             };
+          } catch {}
+          if (pass) {
+            return { pass: true, reason: "一致インデックスOK" };
           }
-          return {
-            pass: false,
-            reason: `一致はしたがインデックス不一致 (hit=${hitIdx}, expected=${q.answerIndex})`,
-          };
+          return { pass: false, reason: "一致はしたがインデックス不一致" };
         }
-      } catch {}
+      } catch (err) {
+        try {
+          await logJsonLine("verify_exception", {
+            id: q.id,
+            error: (err as any)?.message || String(err),
+          });
+        } catch {}
+      }
       return { pass: false, reason: "回答取得に失敗" };
     }
-
 
     const verified: any[] = [];
     const rejected: any[] = [
@@ -1074,9 +1195,23 @@ export async function POST(req: NextRequest) {
           });
         } else {
           rejected.push({ id: q.id, reason: verdict?.reason ?? "検証失敗" });
+          try {
+            await logJsonLine("verify_reject", {
+              stage: "verify",
+              id: q.id,
+              reason: verdict?.reason ?? "検証失敗",
+            });
+          } catch {}
         }
       } catch {
         rejected.push({ id: q.id, reason: "検証エラー" });
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "verify",
+            id: q.id,
+            reason: "検証エラー",
+          });
+        } catch {}
       }
     }
     if (dryRun) {
@@ -1112,6 +1247,7 @@ export async function POST(req: NextRequest) {
       subgenre: q.subgenre ?? null,
       difficulty: q.difficulty,
       source: q.source,
+      franchise: body.title?.trim() || null,
     }));
     // upsert begin logging removed; gpt_job_done will record counts
     const { data, error } = await supabase
@@ -1141,9 +1277,18 @@ export async function POST(req: NextRequest) {
     );
   } catch (e) {
     const err = e as any;
+    const code =
+      typeof err?.status === "number" && err.status >= 400 && err.status <= 599
+        ? err.status
+        : 502;
     return json(
-      { error: err?.message || String(e), requestId: err?.requestId || null },
-      502
+      {
+        error: err?.message || String(e),
+        requestId: err?.requestId || null,
+        status: err?.status ?? null,
+        ...(err?.raw ? { raw: String(err.raw).slice(0, 20000) } : {}),
+      },
+      code
     );
   }
 }

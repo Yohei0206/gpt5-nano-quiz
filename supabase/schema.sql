@@ -59,6 +59,22 @@ do $$ begin
   for all to service_role using (true) with check (true);
 exception when duplicate_object then null; end $$;
 
+-- Topics master (specific titles/franchises)
+create table if not exists public.topics (
+  slug text primary key,
+  label text not null,
+  category text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_topics_label on public.topics (label);
+alter table public.topics enable row level security;
+do $$ begin
+  create policy "topics_read_all" on public.topics for select using (true);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "topics_write_service" on public.topics for all to service_role using (true) with check (true);
+exception when duplicate_object then null; end $$;
+
 -- Difficulties master
 create table if not exists public.difficulties (
   key text primary key,
@@ -115,6 +131,10 @@ do $$ begin
     foreign key (difficulty) references public.difficulties(key)
     not valid;
 exception when duplicate_object then null; end $$;
+
+-- Optional: add a franchise/title column to questions
+alter table public.questions add column if not exists franchise text;
+
 
 -- To validate later (run manually in SQL editor once data is clean):
 -- alter table public.questions validate constraint questions_category_fk;

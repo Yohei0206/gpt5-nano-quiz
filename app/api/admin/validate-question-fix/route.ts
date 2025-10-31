@@ -191,25 +191,13 @@ async function verifyByAnswer(q: any, apiKey: string) {
   const payload: any = {
     model: "gpt-5-nano",
     input:
-      `次の四択クイズの正解に該当する語句を1つだけ答えてください。` +
-      `\n- 回答はできるだけ短く、選択肢と同じ語句で返してください。` +
-      `\n- 解説や前後の文章、コードフェンスは禁止。` +
-      `\n- 出力はJSONのみで、{\\"answer\\": string} の形で返してください。` +
+      `あなたはクイズプレイヤーです。` +
+      `元の問題は4択問題ですが、あなたは選択肢を想像して回答してください。` +
+      `クイズの正解に回答してください。` +
+      `\n- 回答はできるだけ短く、回答のみを返してください。` +
       `\n\n問題: ${q.prompt}`,
-    max_output_tokens: 200,
-    text: {
-      verbosity: "low",
-      format: {
-        type: "json_schema",
-        name: "answer",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["answer"],
-          properties: { answer: { type: "string" } },
-        },
-      },
-    },
+    max_output_tokens: 600,
+    text: { verbosity: "low" },
   };
   const r = await fetch(url, {
     method: "POST",
@@ -225,22 +213,27 @@ async function verifyByAnswer(q: any, apiKey: string) {
     const out = Array.isArray(j.output) ? j.output : [];
     for (const e of out) {
       const c = e?.content?.[0];
-      if (c?.type === "json" && c.json && typeof c.json.answer === "string") {
-        const answer = c.json.answer as string;
+      if (c?.type === "output_text" && typeof c.text === "string") {
+        const answer = String(c.text).trim();
         return matchAnswerToChoices(answer, q.choices, q.answerIndex);
       }
-      if (c?.type === "output_text" && typeof c.text === "string") {
-        try {
-          const v = JSON.parse(c.text);
-          if (typeof v?.answer === "string") return matchAnswerToChoices(v.answer, q.choices, q.answerIndex);
-        } catch {}
+      if (c?.type === "json" && c.json && typeof c.json.answer === "string") {
+        return matchAnswerToChoices(
+          c.json.answer as string,
+          q.choices,
+          q.answerIndex
+        );
       }
     }
   } catch {}
   return { pass: false, reason: "回答取得に失敗" };
 }
 
-function matchAnswerToChoices(answer: string, choices: string[], expectedIndex: number) {
+function matchAnswerToChoices(
+  answer: string,
+  choices: string[],
+  expectedIndex: number
+) {
   const norm = (s: string) =>
     (s || "")
       .trim()
@@ -259,9 +252,15 @@ function matchAnswerToChoices(answer: string, choices: string[], expectedIndex: 
   const hit = normChoices.findIndex((c) => c === ans);
   if (hit < 0) return { pass: false, reason: "選択肢に一致する回答なし" };
   if (Number.isInteger(expectedIndex) && hit === expectedIndex) {
-    return { pass: true, reason: `一致インデックスOK (hit=${hit}, expected=${expectedIndex})` };
+    return {
+      pass: true,
+      reason: `一致インデックスOK (hit=${hit}, expected=${expectedIndex})`,
+    };
   }
-  return { pass: false, reason: `一致はしたがインデックス不一致 (hit=${hit}, expected=${expectedIndex})` };
+  return {
+    pass: false,
+    reason: `一致はしたがインデックス不一致 (hit=${hit}, expected=${expectedIndex})`,
+  };
 }
 
 export async function POST(req: NextRequest) {
