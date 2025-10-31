@@ -17,8 +17,9 @@ function HomeInner() {
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [catLoading, setCatLoading] = useState(false);
   const [catError, setCatError] = useState<string | null>(null);
+  type TopicItem = { slug: string; label: string; category?: string | null };
   const [title, setTitle] = useState("");
-  const [topics, setTopics] = useState<{ slug: string; label: string }[]>([]);
+  const [topics, setTopics] = useState<TopicItem[]>([]);
   const [topLoading, setTopLoading] = useState(false);
   const [topError, setTopError] = useState<string | null>(null);
 
@@ -57,7 +58,14 @@ function HomeInner() {
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
         const items = Array.isArray(j?.items) ? j.items : [];
-        if (alive) setTopics(items.map((x: any) => ({ slug: x.slug, label: x.label })));
+        if (alive)
+          setTopics(
+            items.map((x: any) => ({
+              slug: x.slug,
+              label: x.label,
+              category: x.category ?? null,
+            }))
+          );
       } catch (e) {
         if (alive) setTopError((e as Error).message);
       } finally {
@@ -76,6 +84,12 @@ function HomeInner() {
     ],
     [categories]
   );
+
+  // カテゴリ変更時、サブジャンル選択はリセット
+  useEffect(() => {
+    const matched = topics.find((t) => t.label === title && (t.category ?? "") === (category || ""));
+    if (!matched) setTitle("");
+  }, [category, topics]);
 
   async function start() {
     setError(null);
@@ -132,36 +146,25 @@ function HomeInner() {
           </div>
           <div className="mt-3 grid sm:grid-cols-2 gap-3 items-end">
             <div>
-              <label className="block text-sm">作品タイトル（選択可）</label>
+              <label className="block text-sm">サブジャンル（任意・登録から選択）</label>
               <Select
                 value={title}
                 onChange={(v) => setTitle(v)}
-                options={[{ value: "", label: "未指定" }, ...topics.map(t => ({ value: t.label, label: t.label }))]}
+                options={[
+                  { value: "", label: "未指定" },
+                  ...topics
+                    .filter((t) => (t.category ?? "") === (category || ""))
+                    .map((t) => ({ value: t.label, label: t.label })),
+                ]}
               />
             </div>
-            <div>
-              <label className="block text-sm">作品タイトル（自由入力）</label>
-              <input
-                className="w-full bg-transparent border border-white/10 rounded-md p-2"
-                placeholder="例: ドラゴンボール / FF7 / マリオ"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </div>
-            {topLoading && <div className="text-sm text-white/60">作品一覧 読込中...</div>}
+            {topLoading && (
+              <div className="text-sm text-white/60">サブジャンル一覧 読込中...</div>
+            )}
             {topError && <div className="text-sm text-red-400">{topError}</div>}
           </div>
-          <div className="mt-3">
-            <label className="block text-sm">作品タイトル（任意）</label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2 mt-1"
-              placeholder="例: ドラゴンボール / FF7 / マリオ"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <div className="text-xs text-white/60 mt-1">
-              タイトルを指定すると、その作品に関する問題のみでプレイします。
-            </div>
+          <div className="text-xs text-white/60 mt-1">
+            サブジャンルは選択中のジャンルに紐づくもののみ表示します。
           </div>
         </div>
 
