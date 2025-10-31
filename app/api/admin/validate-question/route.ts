@@ -3,7 +3,7 @@ import { z } from "zod";
 import { logJsonLine } from "@/lib/logger";
 
 export const runtime = "nodejs";
-const budget = 1200;
+const budget = 600;
 const Item = z.object({
   id: z.string().optional(),
   prompt: z.string().min(5),

@@ -645,108 +645,11 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // 事前品質フィルタリング + 全件GPTレビュー＆必要時リライト
+    // 事前品質フィルタリング（静的チェックのみ）
     const qualityRejected: any[] = [];
-    async function reviewAndMaybeRepair(q: any) {
-      try {
-        const urlFix = "https://api.openai.com/v1/responses";
-        const payloadFix: any = {
-          model: "gpt-5-nano",
-          input:
-            `次の四択クイズの問題文が自然で明確な日本語（です・ます調）かを評価し、` +
-            `不自然・曖昧・一意解でない場合は200字以内で修正した問題文を提案してください。` +
-            `選択肢と正解インデックスは変更しないでください。\n` +
-            `【対象】\n問題: ${q.prompt}\n選択肢: ${q.choices.join(
-              ", "
-            )}\n正解インデックス: ${q.answerIndex}\n` +
-            `出力はJSONのみ: {\"natural\": boolean, \"reason\": string, \"prompt\"?: string, \"explanation\"?: string}`,
-          max_output_tokens: budget,
-          text: {
-            verbosity: "low",
-            format: {
-              type: "json_schema",
-              name: "review",
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                // Responses API requires 'required' to include every key listed in 'properties'.
-                // Keep the schema minimal (only required keys) to avoid invalid_json_schema errors.
-                required: ["natural", "reason"],
-                properties: {
-                  natural: { type: "boolean" },
-                  reason: { type: "string" },
-                },
-              },
-            },
-          },
-        };
-        await logJsonLine("gpt_request", {
-          purpose: "generate-batch:review-repair",
-          id: q.id,
-          model: "gpt-5-nano",
-        });
-        const r = await fetch(urlFix, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(payloadFix),
-        });
-        const t = await r.text();
-        try {
-          const reqId =
-            r.headers.get("x-request-id") ||
-            r.headers.get("openai-organization-request-id") ||
-            null;
-          // 保存: status/requestId と raw テキストを常にログに残す（400 等の原因追跡用）
-          await logJsonLine("gpt_response", {
-            purpose: "generate-batch:review-repair",
-            status: r.status,
-            requestId: reqId,
-            raw: t,
-            id: q.id,
-          });
-          const j = JSON.parse(t);
-          const out = Array.isArray(j.output) ? j.output : [];
-          for (const e of out) {
-            const c = e?.content?.[0];
-            if (c?.type === "json" && c.json) {
-              try {
-                gptDebug[q.id] = gptDebug[q.id] || {};
-                gptDebug[q.id].review = c.json;
-              } catch {}
-              return c.json;
-            }
-            if (c?.type === "output_text" && typeof c.text === "string") {
-              try {
-                const parsed = JSON.parse(c.text);
-                gptDebug[q.id] = gptDebug[q.id] || {};
-                gptDebug[q.id].review = parsed;
-                return parsed;
-              } catch {}
-            }
-          }
-        } catch (err) {
-          // JSON 解析などで例外が発生した場合も raw は既にログに記録されているため
-        }
-      } catch {}
-      return null;
-    }
     const qualityKept: typeof out = [];
     for (const q0 of out) {
-      let q = q0;
-      // 全件レビューの実施
-      const rev = await reviewAndMaybeRepair(q);
-      if (rev && rev.natural === false && typeof rev.prompt === "string") {
-        q = {
-          ...q,
-          prompt: norm(rev.prompt).slice(0, 200),
-          explanation: rev.explanation
-            ? norm(rev.explanation).slice(0, 200)
-            : q.explanation,
-        };
-      }
+      const q = q0;
       // 最終チェック
       if (!isNaturalJapaneseText(q.prompt)) {
         qualityRejected.push({
@@ -1047,47 +950,28 @@ export async function POST(req: NextRequest) {
     }
 
     async function verifyQuestion(q: any) {
+      // 検証方式: 問題文のみを投げて、GPTの回答語句を受け取り、
+      // その回答が選択肢に含まれていれば合格とする。
       const urlV = "https://api.openai.com/v1/responses";
       const payloadV: any = {
         model: "gpt-5-nano",
         input:
-          `あなたはクイズ問題のファクトチェックAIです。以下のクイズ項目を一般的に知られる科学的・教育的知識（例：Wikipedia、教科書、信頼性の高いニュースなど）の範囲で検証してください。` +
-          `\n\n出力は必ず以下のJSON構造で、コードフェンスや説明を含めないでください。` +
-          `\n{` +
-          `\n  "pass": boolean, // 問題が正確であればtrue` +
-          `\n  "reason": string, // 判定理由（簡潔に）` +
-          `\n  "source_url": string | null, // 可能なら出典URL` +
-          `\n  "fixed": object | null // 必要最小限の修正案 (prompt, choices, answerIndex, explanation, category のいずれか)` +
-          `\n}` +
-          `\n\n注意事項:` +
-          `\n- 数値問題は±5%の誤差を許容` +
-          `\n- 「約」「およそ」などの曖昧表現は容認` +
-          `\n- 出典が不明な場合は source_url を null にする` +
-          `\n- JSON以外の出力は禁止` +
-          `\n\n重要: 判定には根拠を3件まで提示してください。` +
-          `\n- 各根拠は短い一文（何を根拠にするか）と対応する source_url を含めること。` +
-          `\n- JSON フィールド名は "evidence" とし、次の形式の配列を返すこと:` +
-          `\n  "evidence": [{ "reason": string, "source_url": string | null }, ...]` +
-          `\n- 根拠が3件未満の場合は見つかった分だけ返し、残りは省略すること。` +
-          `\n\n問題: ${q.prompt}` +
-          `\n選択肢: ${q.choices.join(", ")}` +
-          `\n送られた正解インデックス: ${q.answerIndex}` +
-          `\nカテゴリ: ${q.category}` +
-          `\n\nJSON以外の出力は禁止。`,
-        max_output_tokens: budget,
+          `次の四択クイズの正解に該当する語句を1つだけ答えてください。` +
+          `\n- 回答はできるだけ短く、選択肢と同じ語句で返してください。` +
+          `\n- 解説や前後の文章、コードフェンスは禁止。` +
+          `\n- 出力はJSONのみで、{\"answer\": string} の形で返してください。` +
+          `\n\n問題: ${q.prompt}`,
+        max_output_tokens: 200,
         text: {
           verbosity: "low",
           format: {
             type: "json_schema",
-            name: "verdict",
+            name: "answer",
             schema: {
               type: "object",
               additionalProperties: false,
-              required: ["pass", "reason"],
-              properties: {
-                pass: { type: "boolean" },
-                reason: { type: "string" },
-              },
+              required: ["answer"],
+              properties: { answer: { type: "string" } },
             },
           },
         },
@@ -1125,132 +1009,50 @@ export async function POST(req: NextRequest) {
         } catch {}
         const j = JSON.parse(t);
         const out = Array.isArray(j.output) ? j.output : [];
+        let answer: string | null = null;
         for (const e of out) {
           const c = e?.content?.[0];
-          if (c?.type === "json" && c.json) {
-            try {
-              gptDebug[q.id] = gptDebug[q.id] || {};
-              gptDebug[q.id].verifyQuestion = c.json;
-            } catch {}
-            return c.json;
+          if (c?.type === "json" && c.json && typeof c.json.answer === "string") {
+            answer = c.json.answer as string;
+            break;
           }
           if (c?.type === "output_text" && typeof c.text === "string") {
             try {
               const parsed = JSON.parse(c.text);
-              gptDebug[q.id] = gptDebug[q.id] || {};
-              gptDebug[q.id].verifyQuestion = parsed;
-              return parsed;
+              if (typeof parsed?.answer === "string") {
+                answer = parsed.answer as string;
+                break;
+              }
             } catch {}
           }
         }
+        // 判定: 選択肢に含まれているか（インデックスは無視し、語句一致のみ）
+        if (typeof answer === "string") {
+          const normStr = (s: string) =>
+            normalizeJa(s).toLowerCase().replace(/[\s、,。\.]/g, "");
+          const ans = normStr(answer);
+          const choices = (q.choices || []) as string[];
+          const normChoices = choices.map((c) => normStr(c));
+          const hitIdx = normChoices.findIndex((c) => c === ans);
+          if (hitIdx < 0) {
+            return { pass: false, reason: "選択肢に一致する回答なし" };
+          }
+          // 生成時の正解インデックスと一致した選択肢のインデックスが同じ場合のみ合格
+          if (Number.isInteger(q.answerIndex) && hitIdx === q.answerIndex) {
+            return {
+              pass: true,
+              reason: `一致インデックスOK (hit=${hitIdx}, expected=${q.answerIndex})`,
+            };
+          }
+          return {
+            pass: false,
+            reason: `一致はしたがインデックス不一致 (hit=${hitIdx}, expected=${q.answerIndex})`,
+          };
+        }
       } catch {}
-      return { pass: true, reason: "fallback" };
+      return { pass: false, reason: "回答取得に失敗" };
     }
 
-    async function validateAndFixWithSources(q: any) {
-      try {
-        const ev = await fetchWikiEvidence(q.prompt);
-        const url = "https://api.openai.com/v1/responses";
-        const payload: any = {
-          model: "gpt-5-nano",
-          input:
-            `あなたはクイズ問題のファクトチェックAIです。以下のクイズ項目を一般的に知られる科学的・教育的知識（例：Wikipedia、教科書、信頼性の高いニュースなど）の範囲で検証してください。` +
-            `\n\n出力は必ず以下のJSON構造で、コードフェンスや説明を含めないでください。` +
-            `\n{` +
-            `\n  "pass": boolean, // 問題が正確であればtrue` +
-            `\n  "reason": string, // 判定理由（簡潔に）` +
-            `\n  "source_url": string | null, // 可能なら出典URL` +
-            `\n  "fixed": object | null // 必要最小限の修正案 (prompt, choices, answerIndex, explanation, category のいずれか)` +
-            `\n}` +
-            `\n\n注意事項:` +
-            `\n- 数値問題は±5%の誤差を許容` +
-            `\n- 「約」「およそ」などの曖昧表現は容認` +
-            `\n- 出典が不明な場合は source_url を null にする` +
-            `\n- JSON以外の出力は禁止` +
-            `\n\n重要: 判定には根拠を3件まで提示してください。` +
-            `\n- 各根拠は短い一文（何を根拠にするか）と対応する source_url を含めること。` +
-            `\n- JSON フィールド名は "evidence" とし、次の形式の配列を返すこと:` +
-            `\n  "evidence": [{ "reason": string, "source_url": string | null }, ...]` +
-            `\n- 根拠が3件未満の場合は見つかった分だけ返し、残りは省略すること。` +
-            `\n\n【クイズ】` +
-            `\n問題: ${q.prompt}` +
-            `\n選択肢: ${q.choices.join(", ")}` +
-            `\n正解インデックス: ${q.answerIndex}` +
-            `\nカテゴリ: ${q.category}` +
-            (ev?.text
-              ? `\n\n【エビデンス（Wikipedia要約）】\n${ev.text}`
-              : ``) +
-            `\n\nJSON以外の出力は禁止。`,
-          max_output_tokens: budget,
-          text: {
-            verbosity: "low",
-            format: {
-              type: "json_schema",
-              name: "verdict",
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["pass", "reason"],
-                properties: {
-                  pass: { type: "boolean" },
-                  reason: { type: "string" },
-                },
-              },
-            },
-          },
-        };
-        await logJsonLine("gpt_request", {
-          purpose: "generate-batch:validate-and-fix",
-          id: q.id,
-          model: "gpt-5-nano",
-        });
-        const r = await fetch(url, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        const t = await r.text();
-        try {
-          const j = JSON.parse(t);
-          try {
-            const reqId =
-              r.headers.get("x-request-id") ||
-              r.headers.get("openai-organization-request-id") ||
-              null;
-            await logJsonLine("gpt_response", {
-              purpose: "generate-batch:validate-and-fix",
-              status: r.status,
-              requestId: reqId,
-              raw: t.slice(0, 20000),
-              id: q.id,
-            });
-          } catch {}
-          const out = Array.isArray(j.output) ? j.output : [];
-          for (const e of out) {
-            const c = e?.content?.[0];
-            if (c?.type === "json" && c.json) {
-              try {
-                gptDebug[q.id] = gptDebug[q.id] || {};
-                gptDebug[q.id].validateAndFix = c.json;
-              } catch {}
-              return c.json;
-            }
-            if (c?.type === "output_text" && typeof c.text === "string") {
-              try {
-                const parsed = JSON.parse(c.text);
-                gptDebug[q.id] = gptDebug[q.id] || {};
-                gptDebug[q.id].validateAndFix = parsed;
-                return parsed;
-              } catch {}
-            }
-          }
-        } catch {}
-      } catch {}
-      return { pass: true, reason: "fallback" } as any;
-    }
 
     const verified: any[] = [];
     const rejected: any[] = [
@@ -1260,31 +1062,15 @@ export async function POST(req: NextRequest) {
     ];
     for (const q of toVerify) {
       try {
-        const v = await validateAndFixWithSources(q);
-        let useQ = { ...q };
-        if (v?.fixed && typeof v.fixed === "object") {
-          if (typeof v.fixed.prompt === "string") useQ.prompt = v.fixed.prompt;
-          if (Array.isArray(v.fixed.choices) && v.fixed.choices.length === 4)
-            useQ.choices = v.fixed.choices;
-          if (Number.isInteger(v.fixed.answerIndex))
-            useQ.answerIndex = v.fixed.answerIndex as number;
-          if (typeof v.fixed.explanation === "string")
-            useQ.explanation = v.fixed.explanation;
-          if (typeof v.fixed.category === "string")
-            useQ.category = v.fixed.category;
-        }
-        let verdict = v;
-        if (!verdict?.pass && v?.fixed) {
-          // 再検証
-          verdict = await verifyQuestion(useQ);
-        }
+        // 検証は1回のみ実施（最初の検証呼び出しを削除し、単回検証に集約）
+        const verdict = await verifyQuestion(q);
         if (verdict && verdict.pass) {
           verified.push({
-            ...useQ,
+            ...q,
             verified: true,
             verified_at: new Date().toISOString(),
             verify_notes: verdict.reason,
-            source_url: verdict.source_url ?? null,
+            source_url: (verdict as any).source_url ?? null,
           });
         } else {
           rejected.push({ id: q.id, reason: verdict?.reason ?? "検証失敗" });
