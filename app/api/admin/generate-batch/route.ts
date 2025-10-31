@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { serverSupabaseService } from "@/lib/supabase";
 import { logJsonLine } from "@/lib/logger";
+import { normalizeForChoiceCompare } from "@/lib/validation";
 
 export const runtime = "nodejs"; // Service Role 使用
 
@@ -10,6 +11,7 @@ const ReqSchema = z.object({
   count: z.number().int().min(1).max(20).default(10),
   difficulty: z.enum(["easy", "normal", "hard", "mixed"]).default("normal"),
   language: z.enum(["ja", "en"]).default("ja"),
+  title: z.string().min(1).max(100).optional(),
 });
 
 // モデル出力を緩めに受けてから正規化
@@ -214,6 +216,9 @@ export async function POST(req: NextRequest) {
     `難易度/Difficulty: ${difficulty}`,
     `言語/Language: ${body.language}`,
     `出題数/Count: ${body.count}`,
+    ...(body.title && body.title.trim() ? [
+      `作品/Title: ${body.title.trim()}`
+    ] : []),
     "フォーマット厳守: JSON配列のみを返す（itemsラップ不要）。",
     "各要素の仕様（最小限で良い）:",
     "- id: 一意な文字列",
@@ -689,6 +694,13 @@ export async function POST(req: NextRequest) {
       const q = q0;
       // 最終チェック
       if (!isNaturalJapaneseText(q.prompt)) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "日本語として不自然/英語比率過多（修正不可）",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "日本語として不自然/英語比率過多（修正不可）",
@@ -696,6 +708,13 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (hasProhibitedPhrases(q.prompt)) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "問題文に不適切な表現（修正不可）",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "問題文に不適切な表現（修正不可）",
@@ -703,6 +722,13 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (q.choices.length !== 4) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "選択肢が4件ではない/重複排除で欠落",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "選択肢が4件ではない/重複排除で欠落",
@@ -710,6 +736,13 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (q.choices.some((c) => hasProhibitedPhrases(c))) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "選択肢に不適切な表現（以上すべて等）",
+          });
+        } catch {}
         qualityRejected.push({
           id: q.id,
           reason: "選択肢に不適切な表現（以上すべて等）",
@@ -717,10 +750,24 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (q.answerIndex < 0 || q.answerIndex > 3) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "正解インデックス不正",
+          });
+        } catch {}
         qualityRejected.push({ id: q.id, reason: "正解インデックス不正" });
         continue;
       }
       if (q.choices.some((c) => c.length > 60)) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "quality",
+            id: q.id,
+            reason: "選択肢が長すぎる",
+          });
+        } catch {}
         qualityRejected.push({ id: q.id, reason: "選択肢が長すぎる" });
         continue;
       }
@@ -798,6 +845,13 @@ export async function POST(req: NextRequest) {
           choiceOverlap(q.choices, k.choices) >= 3
       );
       if (hit) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "dedup_batch",
+            id: q.id,
+            reason: "バッチ内で類似（重複の可能性）",
+          });
+        } catch {}
         batchDupRejected.push({
           id: q.id,
           reason: "バッチ内で類似（重複の可能性）",
@@ -814,6 +868,13 @@ export async function POST(req: NextRequest) {
         (e) => dice(q.prompt, e.prompt) >= DUP_THRESHOLD
       );
       if (isDup) {
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "dedup_existing",
+            id: q.id,
+            reason: "既存と類似（重複の可能性）",
+          });
+        } catch {}
         dupRejected.push({ id: q.id, reason: "既存と類似（重複の可能性）" });
       } else {
         kept.push(q);
@@ -1019,6 +1080,13 @@ export async function POST(req: NextRequest) {
       });
       const t = await r.text();
       try {
+        await logJsonLine("verify_raw", {
+          id: q.id,
+          status: r.status,
+          raw: t,
+        });
+      } catch {}
+      try {
         try {
           const reqId =
             r.headers.get("x-request-id") ||
@@ -1050,6 +1118,19 @@ export async function POST(req: NextRequest) {
             break;
           }
         }
+        // 回答が取得できない場合のデバッグログ
+        if (typeof answer !== "string") {
+          try {
+            const types = out.map((e: any) => e?.content?.[0]?.type ?? null);
+            await logJsonLine("verify_answer_missing", {
+              id: q.id,
+              outputTypes: types,
+              rawHead: String(t).slice(0, 200),
+            });
+          } catch {}
+          return { pass: false, reason: "回答取得に失敗" };
+        }
+
         // 判定: 選択肢に含まれているか（同一語句一致）
         if (typeof answer === "string") {
           const ans = normalizeForChoiceCompare(answer);
@@ -1083,7 +1164,14 @@ export async function POST(req: NextRequest) {
           }
           return { pass: false, reason: "一致はしたがインデックス不一致" };
         }
-      } catch {}
+      } catch (err) {
+        try {
+          await logJsonLine("verify_exception", {
+            id: q.id,
+            error: (err as any)?.message || String(err),
+          });
+        } catch {}
+      }
       return { pass: false, reason: "回答取得に失敗" };
     }
 
@@ -1107,9 +1195,23 @@ export async function POST(req: NextRequest) {
           });
         } else {
           rejected.push({ id: q.id, reason: verdict?.reason ?? "検証失敗" });
+          try {
+            await logJsonLine("verify_reject", {
+              stage: "verify",
+              id: q.id,
+              reason: verdict?.reason ?? "検証失敗",
+            });
+          } catch {}
         }
       } catch {
         rejected.push({ id: q.id, reason: "検証エラー" });
+        try {
+          await logJsonLine("verify_reject", {
+            stage: "verify",
+            id: q.id,
+            reason: "検証エラー",
+          });
+        } catch {}
       }
     }
     if (dryRun) {
@@ -1145,6 +1247,7 @@ export async function POST(req: NextRequest) {
       subgenre: q.subgenre ?? null,
       difficulty: q.difficulty,
       source: q.source,
+      franchise: body.title?.trim() || null,
     }));
     // upsert begin logging removed; gpt_job_done will record counts
     const { data, error } = await supabase

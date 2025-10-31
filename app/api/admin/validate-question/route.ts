@@ -193,6 +193,13 @@ async function verifyWithSources(q: any, apiKey: string) {
   });
   const t = await r.text();
   try {
+    await logJsonLine("verify_raw_admin", {
+      id: q?.id ?? null,
+      status: r.status,
+      raw: t,
+    });
+  } catch {}
+  try {
     await logJsonLine("gpt_response", {
       purpose: "admin:validate-question",
       mode: "fallback",
@@ -259,7 +266,22 @@ async function verifyByAnswer(q: any, apiKey: string) {
         );
       }
     }
-  } catch {}
+    try {
+      const types = out.map((e: any) => e?.content?.[0]?.type ?? null);
+      await logJsonLine("verify_answer_missing_admin", {
+        id: q?.id ?? null,
+        outputTypes: types,
+        rawHead: String(t).slice(0, 200),
+      });
+    } catch {}
+  } catch (err) {
+    try {
+      await logJsonLine("verify_exception_admin", {
+        id: q?.id ?? null,
+        error: (err as any)?.message || String(err),
+      });
+    } catch {}
+  }
   return { pass: false, reason: "回答取得に失敗" };
 }
 

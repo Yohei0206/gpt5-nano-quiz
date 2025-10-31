@@ -9,6 +9,7 @@ const BodySchema = z.object({
   difficulty: z.enum(["easy", "normal", "hard"]).default("normal"),
   count: z.number().int().min(1).max(10).default(4),
   language: z.enum(["ja", "en"]).default("ja"),
+  title: z.string().max(100).optional(),
 });
 
 function json(data: unknown, status = 200) {
@@ -28,12 +29,14 @@ export async function POST(req: NextRequest) {
 
   const supabase = serverSupabaseAnon();
   const hasCategory = !!(body.category && body.category.trim().length > 0);
+  const hasTitle = !!(body as any).title && String((body as any).title).trim().length > 0;
 
   let query = supabase
     .from("questions")
     .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source")
     .eq("difficulty", body.difficulty);
   if (hasCategory) query = query.eq("category", body.category!.trim());
+  if (hasTitle) query = query.eq("franchise", String((body as any).title).trim());
   const { data, error } = await query.limit(200);
 
   if (error) return json({ error: error.message }, 500);
@@ -41,15 +44,18 @@ export async function POST(req: NextRequest) {
 
   let pool = rows;
   if (pool.length < body.count) {
-    if (hasCategory) {
-      const { data: more1 } = await supabase
+    if (hasCategory || hasTitle) {
+      let q1 = supabase
         .from("questions")
         .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source")
-        .eq("category", body.category!.trim())
         .limit(200);
+      if (hasCategory) q1 = q1.eq("category", body.category!.trim());
+      if (hasTitle) q1 = q1.eq("franchise", String((body as any).title).trim());
+      const { data: more1 } = await q1;
       if (more1) pool = uniqueById([...pool, ...more1]);
     }
-    if (pool.length < body.count) {
+    // タイトル指定がある場合はそれ以外を混ぜない
+    if (pool.length < body.count && !hasTitle) {
       const { data: more2 } = await supabase
         .from("questions")
         .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source")
