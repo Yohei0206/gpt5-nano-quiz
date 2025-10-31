@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { logJsonLine } from "@/lib/logger";
+import { matchAnswerToChoices } from "@/lib/validation";
 
 export const runtime = "nodejs";
 const budget = 600;
@@ -217,6 +218,51 @@ async function verifyWithSources(q: any, apiKey: string) {
   return { pass: true, reason: "fallback" };
 }
 
+// 新方式: 問題文のみをGPTへ投げて回答語句を受け取り、
+// その回答が選択肢に含まれており、かつ生成時の正解インデックスと一致すれば合格。
+async function verifyByAnswer(q: any, apiKey: string) {
+  const url = "https://api.openai.com/v1/responses";
+  const payload: any = {
+    model: "gpt-5-nano",
+    input:
+      `クイズの正解に回答してください` +
+      `\n- 回答はできるだけ短く、回答のみを返してください。` +
+      `\n- 元の問題は4択ですが、選択肢は提示しません。` +
+      `\n- 句読点・引用符・記号は付けない。1語または短い名詞句。` +
+      `\n\n問題: ${q.prompt}`,
+    max_output_tokens: 600,
+    text: { verbosity: "low" },
+  };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const t = await r.text();
+  try {
+    const j = JSON.parse(t);
+    const out = Array.isArray(j.output) ? j.output : [];
+    for (const e of out) {
+      const c = e?.content?.[0];
+      if (c?.type === "output_text" && typeof c.text === "string") {
+        const answer = String(c.text).trim();
+        return matchAnswerToChoices(answer, q.choices, q.answerIndex);
+      }
+      if (c?.type === "json" && c.json && typeof c.json.answer === "string") {
+        return matchAnswerToChoices(
+          c.json.answer as string,
+          q.choices,
+          q.answerIndex
+        );
+      }
+    }
+  } catch {}
+  return { pass: false, reason: "回答取得に失敗" };
+}
+
 export async function POST(req: NextRequest) {
   const adminToken = process.env.ADMIN_TOKEN;
   const provided = req.headers.get("x-admin-token");
@@ -285,7 +331,7 @@ export async function POST(req: NextRequest) {
         });
         continue;
       }
-      const v = await verifyWithSources(q, apiKey);
+      const v = await verifyByAnswer(q, apiKey);
       results.push({ id: q.id ?? null, ...v });
     } catch (e) {
       results.push({ id: q.id ?? null, pass: false, reason: "検証エラー" });
