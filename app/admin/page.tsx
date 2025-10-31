@@ -204,13 +204,18 @@ export default function AdminPage() {
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
         const items = Array.isArray(j?.items) ? j.items : [];
-        const mapped = items.map((x: any) => ({ slug: x.slug, label: x.label })) as CategoryItem[];
+        const mapped = items.map((x: any) => ({
+          slug: x.slug,
+          label: x.label,
+        })) as CategoryItem[];
         if (alive) {
           setDbCategories(mapped);
           // Initialize selects if current values are not in the new list
           if (mapped.length) {
-            if (!mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
-            if (!category || !mapped.some((c) => c.slug === category)) setCategory(mapped[0].slug);
+            if (!mapped.some((c) => c.slug === genGenre))
+              setGenGenre(mapped[0].slug);
+            if (!category || !mapped.some((c) => c.slug === category))
+              setCategory(mapped[0].slug);
           }
         }
       } catch (e) {
@@ -301,12 +306,18 @@ export default function AdminPage() {
         const r2 = await fetch("/api/categories", { cache: "no-store" });
         const j2 = await r2.json();
         if (r2.ok && Array.isArray(j2?.items)) {
-          const mapped = j2.items.map((x: any) => ({ slug: x.slug, label: x.label })) as CategoryItem[];
+          const mapped = j2.items.map((x: any) => ({
+            slug: x.slug,
+            label: x.label,
+          })) as CategoryItem[];
           setDbCategories(mapped);
-          if (mapped.length && !mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
+          if (mapped.length && !mapped.some((c) => c.slug === genGenre))
+            setGenGenre(mapped[0].slug);
         }
-      } catch {}
-      finally { setCatLoading(false); }
+      } catch {
+      } finally {
+        setCatLoading(false);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -527,11 +538,12 @@ export default function AdminPage() {
         body: JSON.stringify({ category: genGenre, limit: rebalanceLimit }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
+      if (!r.ok)
+        throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
       setInfo(
-        `回答位置を再配置しました（更新 ${data.updated} 件、分布 ${
-          (data.distribution || []).join(",")
-        }）。`
+        `回答位置を再配置しました（更新 ${data.updated} 件、分布 ${(
+          data.distribution || []
+        ).join(",")}）。`
       );
       await loadPreview();
     } catch (e) {
@@ -565,7 +577,8 @@ export default function AdminPage() {
         }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+      if (!r.ok)
+        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
       setInfo(`トピックを追加しました: ${data.item?.label || newTopicLabel}`);
       setNewTopicSlug("");
       setNewTopicLabel("");
@@ -575,9 +588,13 @@ export default function AdminPage() {
         const r2 = await fetch("/api/topics", { cache: "no-store" });
         const j2 = await r2.json();
         if (r2.ok && Array.isArray(j2?.items))
-          setTopics(j2.items.map((x: any) => ({ slug: x.slug, label: x.label })));
-      } catch {}
-      finally { setTopLoading(false); }
+          setTopics(
+            j2.items.map((x: any) => ({ slug: x.slug, label: x.label }))
+          );
+      } catch {
+      } finally {
+        setTopLoading(false);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -823,7 +840,9 @@ export default function AdminPage() {
         <div className="font-semibold">作品タイトル管理</div>
         <div className="grid sm:grid-cols-3 gap-3 items-end">
           <div>
-            <label className="block text-sm mb-1">スラッグ（英数字・ハイフン）</label>
+            <label className="block text-sm mb-1">
+              スラッグ（英数字・ハイフン）
+            </label>
             <input
               className="w-full bg-transparent border border-white/10 rounded-md p-2"
               placeholder="例: dragon-ball"
@@ -841,7 +860,11 @@ export default function AdminPage() {
             />
           </div>
           <div>
-            <button className="btn btn-primary w-full" onClick={addTopic} disabled={addingTopic}>
+            <button
+              className="btn btn-primary w-full"
+              onClick={addTopic}
+              disabled={addingTopic}
+            >
               {addingTopic ? "追加中..." : "トピック追加"}
             </button>
           </div>
@@ -858,7 +881,10 @@ export default function AdminPage() {
             <Select
               value={genGenre}
               onChange={setGenGenre}
-              options={dbCategories.map((c) => ({ value: c.slug, label: c.label }))}
+              options={dbCategories.map((c) => ({
+                value: c.slug,
+                label: c.label,
+              }))}
             />
             {catLoading && (
               <div className="text-xs text-white/60 mt-1">読込中...</div>
@@ -946,7 +972,10 @@ export default function AdminPage() {
             <Select
               value={genGenre}
               onChange={setGenGenre}
-              options={dbCategories.map((c) => ({ value: c.slug, label: c.label }))}
+              options={dbCategories.map((c) => ({
+                value: c.slug,
+                label: c.label,
+              }))}
             />
           </div>
           <div>
@@ -965,13 +994,18 @@ export default function AdminPage() {
             />
           </div>
           <div className="flex items-end">
-            <button className="btn btn-primary w-full" onClick={rebalanceAnswers} disabled={rebalancing}>
+            <button
+              className="btn btn-primary w-full"
+              onClick={rebalanceAnswers}
+              disabled={rebalancing}
+            >
               {rebalancing ? "並び替え中..." : "回答位置を均等化"}
             </button>
           </div>
         </div>
         <div className="text-xs text-white/60">
-          指定ジャンルの直近N件について、正解の位置を 0→1→2→3→… の順で再配置します。
+          指定ジャンルの直近N件について、正解の位置を 0→1→2→3→…
+          の順で再配置します。
           問題本文や選択肢内容は変更せず、選択肢の並びのみ入れ替えます。
         </div>
       </div>

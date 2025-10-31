@@ -216,9 +216,9 @@ export async function POST(req: NextRequest) {
     `難易度/Difficulty: ${difficulty}`,
     `言語/Language: ${body.language}`,
     `出題数/Count: ${body.count}`,
-    ...(body.title && body.title.trim() ? [
-      `作品/Title: ${body.title.trim()}`
-    ] : []),
+    ...(body.title && body.title.trim()
+      ? [`作品/Title: ${body.title.trim()}`]
+      : []),
     "フォーマット厳守: JSON配列のみを返す（itemsラップ不要）。",
     "各要素の仕様（最小限で良い）:",
     "- id: 一意な文字列",
