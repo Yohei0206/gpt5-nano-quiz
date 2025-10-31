@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 export const runtime = "nodejs";
-const budget = 1200;
+const budget = 600;
 const ReqSchema = z.object({
   genre: z.string().min(1),
   count: z.number().int().min(1).max(20).default(6),

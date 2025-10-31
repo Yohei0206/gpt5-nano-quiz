@@ -217,6 +217,86 @@ async function verifyWithSources(q: any, apiKey: string) {
   return { pass: true, reason: "fallback" };
 }
 
+// 新方式: 問題文のみをGPTへ投げて回答語句を受け取り、
+// その回答が選択肢に含まれていれば合格とする。
+async function verifyByAnswer(q: any, apiKey: string) {
+  const url = "https://api.openai.com/v1/responses";
+  const payload: any = {
+    model: "gpt-5-nano",
+    input:
+      `次の四択クイズの正解に該当する語句を1つだけ答えてください。` +
+      `\n- 回答はできるだけ短く、選択肢と同じ語句で返してください。` +
+      `\n- 解説や前後の文章、コードフェンスは禁止。` +
+      `\n- 出力はJSONのみで、{\\"answer\\": string} の形で返してください。` +
+      `\n\n問題: ${q.prompt}`,
+    max_output_tokens: 200,
+    text: {
+      verbosity: "low",
+      format: {
+        type: "json_schema",
+        name: "answer",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["answer"],
+          properties: { answer: { type: "string" } },
+        },
+      },
+    },
+  };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const t = await r.text();
+  try {
+    const j = JSON.parse(t);
+    const out = Array.isArray(j.output) ? j.output : [];
+    for (const e of out) {
+      const c = e?.content?.[0];
+      if (c?.type === "json" && c.json && typeof c.json.answer === "string") {
+        const answer = c.json.answer as string;
+        return matchAnswerToChoices(answer, q.choices, q.answerIndex);
+      }
+      if (c?.type === "output_text" && typeof c.text === "string") {
+        try {
+          const v = JSON.parse(c.text);
+          if (typeof v?.answer === "string") return matchAnswerToChoices(v.answer, q.choices, q.answerIndex);
+        } catch {}
+      }
+    }
+  } catch {}
+  return { pass: false, reason: "回答取得に失敗" };
+}
+
+function matchAnswerToChoices(answer: string, choices: string[], expectedIndex: number) {
+  const norm = (s: string) =>
+    (s || "")
+      .trim()
+      .replace(/[\u3000\s]+/g, " ")
+      .replace(/[“”]/g, '"')
+      .replace(/[’]/g, "'")
+      .replace(/[‐‑‒–—―]/g, "-")
+      .replace(/[．｡]/g, ".")
+      .replace(/[，､]/g, ",")
+      .replace(/[！]/g, "!")
+      .replace(/[？]/g, "?")
+      .toLowerCase()
+      .replace(/[\s、,。\.]/g, "");
+  const ans = norm(answer);
+  const normChoices = choices.map((c) => norm(c));
+  const hit = normChoices.findIndex((c) => c === ans);
+  if (hit < 0) return { pass: false, reason: "選択肢に一致する回答なし" };
+  if (Number.isInteger(expectedIndex) && hit === expectedIndex) {
+    return { pass: true, reason: `一致インデックスOK (hit=${hit}, expected=${expectedIndex})` };
+  }
+  return { pass: false, reason: `一致はしたがインデックス不一致 (hit=${hit}, expected=${expectedIndex})` };
+}
+
 export async function POST(req: NextRequest) {
   const adminToken = process.env.ADMIN_TOKEN;
   const provided = req.headers.get("x-admin-token");
@@ -285,7 +365,7 @@ export async function POST(req: NextRequest) {
         });
         continue;
       }
-      const v = await verifyWithSources(q, apiKey);
+      const v = await verifyByAnswer(q, apiKey);
       results.push({ id: q.id ?? null, ...v });
     } catch (e) {
       results.push({ id: q.id ?? null, pass: false, reason: "検証エラー" });

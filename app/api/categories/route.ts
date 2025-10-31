@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 import { serverSupabaseAnon } from "@/lib/supabase";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(_req: NextRequest) {
   const supabase = serverSupabaseAnon();
@@ -12,12 +14,19 @@ export async function GET(_req: NextRequest) {
   if (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "CDN-Cache-Control": "no-store",
+      },
     });
   }
   return new Response(JSON.stringify({ items: data ?? [] }), {
     status: 200,
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "CDN-Cache-Control": "no-store",
+    },
   });
 }
-

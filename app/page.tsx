@@ -24,7 +24,7 @@ function HomeInner() {
       setCatLoading(true);
       setCatError(null);
       try {
-        const r = await fetch("/api/categories");
+        const r = await fetch("/api/categories", { cache: "no-store" });
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
         const items = Array.isArray(j?.items) ? j.items : [];

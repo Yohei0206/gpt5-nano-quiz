@@ -1,5 +1,5 @@
 ﻿"use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Select from "@/components/Select";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
@@ -49,6 +49,16 @@ const categories: {
     ],
   },
   {
+    slug: "jojo",
+    label: "ジョジョの奇妙な冒険",
+    subgenres: [],
+  },
+  {
+    slug: "hunter-hunter",
+    label: "HUNTER×HUNTER[漫画]",
+    subgenres: [],
+  },
+  {
     slug: "doraemon",
     label: "ドラえもん",
     subgenres: [],
@@ -94,6 +104,7 @@ const categories: {
     ],
   },
 ];
+type CategoryItem = { slug: string; label: string };
 
 const QuestionSchema = z.object({
   id: z.string(),
@@ -116,7 +127,13 @@ function genId() {
 }
 
 export default function AdminPage() {
-  const [category, setCategory] = useState(categories[0].slug);
+  // DB categories
+  const [dbCategories, setDbCategories] = useState<CategoryItem[]>([]);
+  const [catLoading, setCatLoading] = useState(false);
+  const [catError, setCatError] = useState<string | null>(null);
+
+  // Selected category for manual add (fallback to first when loaded)
+  const [category, setCategory] = useState<string>("");
   const subs = useMemo(
     () => categories.find((c) => c.slug === category)?.subgenres ?? [],
     [category]
@@ -167,6 +184,37 @@ export default function AdminPage() {
   const [logs, setLogs] = useState<any[] | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsFilter, setLogsFilter] = useState("");
+
+  // Load categories from DB
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCatLoading(true);
+      setCatError(null);
+      try {
+        const r = await fetch("/api/categories", { cache: "no-store" });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+        const items = Array.isArray(j?.items) ? j.items : [];
+        const mapped = items.map((x: any) => ({ slug: x.slug, label: x.label })) as CategoryItem[];
+        if (alive) {
+          setDbCategories(mapped);
+          // Initialize selects if current values are not in the new list
+          if (mapped.length) {
+            if (!mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
+            if (!category || !mapped.some((c) => c.slug === category)) setCategory(mapped[0].slug);
+          }
+        }
+      } catch (e) {
+        if (alive) setCatError((e as Error).message);
+      } finally {
+        if (alive) setCatLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   function resetForm() {
     setPrompt("");
@@ -239,6 +287,18 @@ export default function AdminPage() {
       setInfo(`カテゴリーを追加しました: ${data.item?.label || newCatLabel}`);
       setNewCatSlug("");
       setNewCatLabel("");
+      // Refresh categories after successful addition
+      try {
+        setCatLoading(true);
+        const r2 = await fetch("/api/categories", { cache: "no-store" });
+        const j2 = await r2.json();
+        if (r2.ok && Array.isArray(j2?.items)) {
+          const mapped = j2.items.map((x: any) => ({ slug: x.slug, label: x.label })) as CategoryItem[];
+          setDbCategories(mapped);
+          if (mapped.length && !mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
+        }
+      } catch {}
+      finally { setCatLoading(false); }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -680,15 +740,18 @@ export default function AdminPage() {
         </div>
         <div className="grid sm:grid-cols-4 gap-4">
           <div>
-            <label className="block text-sm mb-1">ジャンル（固定）</label>
+            <label className="block text-sm mb-1">ジャンル</label>
             <Select
               value={genGenre}
               onChange={setGenGenre}
-              options={categories.map((c) => ({
-                value: c.slug,
-                label: c.label,
-              }))}
+              options={dbCategories.map((c) => ({ value: c.slug, label: c.label }))}
             />
+            {catLoading && (
+              <div className="text-xs text-white/60 mt-1">読込中...</div>
+            )}
+            {catError && (
+              <div className="text-xs text-red-400 mt-1">{catError}</div>
+            )}
           </div>
           <div>
             <label className="block text-sm mb-1">件数</label>
