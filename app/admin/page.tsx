@@ -616,8 +616,9 @@ export default function AdminPage() {
       <header className="text-center">
         <h1 className="text-2xl font-bold">管理: 問題作成</h1>
         <p className="text-white/70 text-sm mt-1">
-          事前作成データ用のエディタ。JSONにエクスポートして `data/questions.ts`
-          へ反映してください。
+          Supabase の `public.questions` へ直接保存する管理用エディタです。保存
+          操作で即時に反映されるため、必要に応じて JSON コピーで控えも確保し
+          てください。
         </p>
       </header>
       <div className="flex justify-end">
