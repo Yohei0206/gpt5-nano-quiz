@@ -1,100 +1,111 @@
 # GPT-5 Nano Quiz (Next.js)
 
-React/Next.js クイズアプリのMVP実装です。仕様更新に合わせ、開発から Supabase を利用して問題を配信・保存します。
+React/Next.js 製のクイズアプリです。Supabase をデータストアに採用し、事前生成した問題や GPT-5 Nano を使った検証フローを管理 API から扱えるようにしています。
+
+## 主な機能
+
+- **シングルプレイ**: ジャンル・サブジャンル・難易度・出題数を選択して `/api/generate-questions` から問題を取得し、1問ずつ回答します。
+- **早押し対戦モード**: `/play/buzzer` で部屋作成・参加・解答を行うリアルタイム対戦。`matches` 系テーブルを用いたロック制御と効果音演出を備えています。
+- **問題フィードバック**: 結果画面から問題修正リクエストを `/api/questions/report` に送信し、`question_reports` テーブルへ蓄積します。
+- **管理 API**: カテゴリ・トピックの登録、問題バッチ生成、検証、自動修正、リバランスなどを `ADMIN_TOKEN` で保護された API 群から実行できます。
+
+## 技術スタック
+
+- Next.js 14 (App Router) + React 18 + TypeScript
+- Supabase (PostgreSQL + Storage + Row Level Security)
+- Tailwind CSS / カスタム UI コンポーネント
+- Zod による入力バリデーション
+
+## ディレクトリ構成
+
+| パス | 説明 |
+| --- | --- |
+| `app/` | 画面と API ルート。`app/play` 配下にプレイ画面、`app/api` 配下に各種 API |
+| `components/` | 再利用可能な UI コンポーネント |
+| `lib/` | Supabase クライアント、状態管理、型、対戦モードのヘルパー |
+| `docs/` | プロダクト/ロジックに関するドキュメント |
+| `supabase/` | 本番/ローカルで適用する SQL スキーマ |
+| `data/` | 初期データや検証向けスクリプト (必要に応じて利用) |
 
 ## セットアップ
 
-1) 依存関係のインストール
+1. 依存関係のインストール
+   ```bash
+   npm install
+   ```
+2. `.env` に環境変数を設定
+   ```bash
+   SUPABASE_URL=...                     # プロジェクトの URL
+   SUPABASE_ANON_KEY=...                # anon key (フロント/Edge 用)
+   SUPABASE_SERVICE_ROLE_KEY=...        # service role key (管理 API 用)
+   ADMIN_TOKEN=...                      # 管理 API への保護トークン
+   NEXT_PUBLIC_ADMIN_TOKEN=...          # 開発用: フロントから送る場合のみ
+   API_KEY=...                          # OpenAI API key。OPENAI_API_KEY でも可
+   # DEBUG_GENERATION=1                 # 任意: バッチ生成で詳細ログを出す
+   ```
+3. Supabase スキーマを適用
+   - 一般クイズ/マスタ類: `supabase/schema.sql`
+   - 早押し対戦モード: `supabase/buzzer.sql`
+   - 既存問題のリセットが必要な場合は `supabase/clear_questions.sql`
+4. 開発サーバーの起動
+   ```bash
+   npm run dev
+   ```
+   ブラウザで `http://localhost:3000` を開きます。
+5. その他コマンド
+   ```bash
+   npm run build   # 本番ビルド
+   npm run start   # 本番サーバー
+   npm run lint    # Lint
+   npm run test    # バリデーション関連の Node.js テスト
+   ```
 
-```
-npm install
-```
+## 画面とロジックの流れ
 
-2) Supabase 環境変数（.env）
+### シングルプレイ
+1. `app/page.tsx` でカテゴリ(`/api/categories`)とサブジャンル(`/api/topics`)を取得し、条件を選択。
+2. スタートで `/api/generate-questions` を呼び出し、Supabase `questions` テーブルから条件に合う問題をシャッフル抽出します。
+3. `lib/store.tsx` のコンテキストに問題と解答状態を保存し、`/play` (`app/play/page.tsx`) で 1 問ずつ回答。
+4. `/result` (`app/result/page.tsx`) でスコアと解説を表示し、必要に応じて `ReportIssueButton` 経由でフィードバックを送信。
 
-```
-SUPABASE_URL=https://xxxx.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOi...
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...  # 管理API用（サーバのみ）
-# 任意: 管理APIに簡易トークンを付けたい場合
-# ADMIN_TOKEN=some-secret
-# NEXT_PUBLIC_ADMIN_TOKEN=some-secret   # フロントから渡す場合のみ
-```
+### 早押し対戦モード
+1. `/play/buzzer` (`app/play/buzzer/page.tsx`) から部屋を作成。`POST /api/buzzer/matches` が `matches`/`match_players`/`match_questions` を初期化し、ホストトークンと参加コードを返します。
+2. 参加者は `POST /api/buzzer/join` で合流し、トークンを受け取ります。
+3. ホストが `POST /api/buzzer/start` を叩くと状態が `in_progress` になり、問題が順番に配信されます。
+4. プレイヤーは `POST /api/buzzer/answer` (または `buzz`) を通じて回答。ロック制御とスコア加算が行われ、`/api/buzzer/state` のポーリングで進行状況を共有します。
+5. 全問終了後は `state=finished` になり、履歴と最終スコアを表示。
 
-3) スキーマ作成（Supabase SQL Editor で実行）
+## API サマリ
 
-```
--- 1) 基本スキーマ
--- ファイル: supabase/schema.sql の内容を実行
+| メソッド | パス | 説明 |
+| --- | --- | --- |
+| GET | `/api/categories` | カテゴリ一覧 (`public.categories`) を返却 |
+| GET | `/api/topics` | サブジャンル一覧 (`public.topics`) を返却 |
+| GET | `/api/difficulties` | 難易度マスタ (`public.difficulties`) を返却 |
+| POST | `/api/generate-questions` | 条件に応じて `questions` から問題を取得 |
+| GET | `/api/questions` | 管理/一覧表示用のページング付き問題 API |
+| POST | `/api/questions/report` | 問題修正リクエストを `question_reports` に保存 |
+| POST | `/api/buzzer/*` | 早押しモードの部屋作成/参加/開始/解答エンドポイント |
+| GET | `/api/buzzer/state` | 対戦状態・履歴を取得 |
+| POST | `/api/admin/*` | 管理機能 (カテゴリ/トピック登録、バッチ生成、検証等)。`ADMIN_TOKEN` が必要 |
 
--- 2) 早押し対戦モード用スキーマ
--- ファイル: supabase/buzzer.sql の内容も実行
-```
+## Supabase テーブル
 
-4) 開発起動
+- `questions`: 4択問題本体。`category`, `difficulty`, `subgenre`, `franchise` などの列を持ちます。
+- `categories` / `topics` / `difficulties`: フロントの選択肢を構成するマスタテーブル。
+- `question_reports`: ユーザーからの修正リクエスト蓄積テーブル。
+- `rejected_questions`: 検証で弾かれた問題の保管先。
+- `matches` / `match_players` / `match_questions` / `match_events`: 早押し対戦モードで使用するテーブル群。
 
-```
-npm run dev
-```
+各テーブル定義は `supabase/schema.sql` および `supabase/buzzer.sql` を参照してください。
 
-ブラウザで `http://localhost:3000` にアクセスします。
+## ドキュメント
 
-## 構成
+- `docs/logic-overview.md`: 画面/API/データベースのロジックを俯瞰した最新資料。
+- `docs/flow_question_generation.md`: 問題生成フローの詳細ノート。
 
-- `app/api/generate-questions/route.ts` … Supabase から条件で取得し、シャッフルの上で所定件数返却。
-- `app/api/questions/route.ts` … Supabase の質問をページングで返却。
-- `app/api/categories/route.ts` … カテゴリー一覧（DBの `public.categories`）を返却。
-- `app/api/admin/categories/route.ts` … 管理用カテゴリー作成（service role・Node runtime）。
-- `app/api/admin/questions/route.ts` … 管理画面からの一括保存（service role使用・Node runtime）。
-- `app/api/buzzer/*` … 早押し対戦モードのAPI群（部屋作成/参加/開始/解答/状態）。
-- `lib/supabase.ts` … サーバ用 Supabase クライアント（anon / service）。
-- `app/page.tsx` … トップ（ジャンル/難易度/出題数の選択 → 生成 → /play へ）。
-- `app/play/page.tsx` … 1問ずつ回答、進捗バー、最後に結果へ。
-- `app/play/buzzer/page.tsx` … 早押し対戦画面（ポーリングで同期、効果音、タイプライタ演出）。
-- `app/result/page.tsx` … 正答・解説を一覧表示、リスタート。
-- `lib/store.tsx` … クイズ状態の簡易ストア（コンテキスト）。
-- `lib/prompt.ts` … system/userプロンプトの組み立て。
-- `lib/types.ts` … 型定義。
-- `lib/buzzer/types.ts` … 対戦モード用の型。
-- `lib/buzzer/constants.ts` … 対戦モードのカテゴリ定数（UI用ラベル）。
-- `lib/buzzer/audio.ts` … ブラウザでのオーディオ解放ユーティリティ。
+## 開発メモ
 
-## 仕様メモ
-
-- モデルは `gpt-5-nano` 固定。
-- APIキーは `process.env.API_KEY`（または `OPENAI_API_KEY`）。クライアントへは一切送信しません。
-- 出力は厳格に JSON 配列（各要素: id, prompt, choices(4), answerIndex, explanation?, category, difficulty, source）。
-- 依存：Next.js 14 + TypeScript + Tailwind + Zod。
-
-## 注意 / 拡張
-
-- 本番では Edge ルートでは service role を使わず、書き込みは `runtime = 'nodejs'` の管理APIのみで行ってください。
-- 参考の管理UI（/admin）は現在は簡易な認可です。必要に応じてAuth連携（Auth.js/Supabase Auth）へ切替可能です。
-- ヘッダーの「管理」リンクはローカル環境（`NODE_ENV !== 'production'`）のみ表示します。
-
-## 変更点（最近）
-
-- シングルプレイのジャンル選択をプルダウン化し、DBのカテゴリーを `/api/categories` から取得。
-- カテゴリーに「ドラえもん」を追加（`supabase/schema.sql` のシードにも追加済み）。
-- 管理APIにカテゴリー作成エンドポイントを追加（`POST /api/admin/categories`）。
-- 早押し対戦の問題文エリアに最小3行分の高さを確保してレイアウトのズレを抑制。
-- 対戦ページの型・タイマー/オーディオの型周りを整理（`lib/buzzer/*` へ切り出し、TypeScriptエラー解消）。
-
-## 早押し対戦モード（概要）
-
-- スキーマ: `supabase/buzzer.sql` を適用（matches, match_players, match_questions, match_events）。
-- フロー: ルーム作成 → 参加 → 開始 → 状態ポーリング → 解答。
-- 主なAPI:
-  - ルーム作成: `POST /api/buzzer/matches`（body: `{ category, difficulty, questionCount, hostName }`）
-  - 参加: `POST /api/buzzer/join`（`{ joinCode, name }` または `{ matchId, name }`）
-  - 開始: `POST /api/buzzer/start`（ホストのトークン必要）
-  - 解答: `POST /api/buzzer/answer`（プレイヤートークン・インデックス指定）
-  - 状態: `GET /api/buzzer/state?matchId=...`
-
-効果音は `app/public/*.mp3` を参照（import不要）。
-
-## カテゴリー管理
-
-- 一覧取得: `GET /api/categories`（`public.categories` から返却）。
-- 追加（管理者）: `POST /api/admin/categories` with `x-admin-token`（任意の簡易保護）。
-- 既定のカテゴリーは `supabase/schema.sql` のシードを参照（再実行で追加入り）。
+- モデルは `gpt-5-nano` を想定しています。API キーはサーバーサイドでのみ使用し、クライアントには渡しません。
+- Edge ルートで書き込みが必要な場合は Node.js ランタイム (`runtime = 'nodejs'`) を利用してください。
+- `/admin` の UI は簡易認証であり、`NODE_ENV !== 'production'` の環境でのみヘッダーにリンクを表示します。
