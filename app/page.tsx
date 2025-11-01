@@ -4,7 +4,8 @@ import Select from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { useQuiz } from "@/lib/store";
 import type { Difficulty } from "@/lib/types";
-type CategoryItem = { slug: string; label: string };
+import { useCatalogData } from "@/lib/hooks/useCatalogData";
+import { useTopicData } from "@/lib/hooks/useTopicData";
 
 function HomeInner() {
   const router = useRouter();
@@ -14,68 +15,17 @@ function HomeInner() {
   const [count, setCount] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [catLoading, setCatLoading] = useState(false);
-  const [catError, setCatError] = useState<string | null>(null);
-  type TopicItem = { slug: string; label: string; category?: string | null };
+  const {
+    data: categories,
+    loading: catLoading,
+    error: catError,
+  } = useCatalogData();
   const [title, setTitle] = useState("");
-  const [topics, setTopics] = useState<TopicItem[]>([]);
-  const [topLoading, setTopLoading] = useState(false);
-  const [topError, setTopError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setCatLoading(true);
-      setCatError(null);
-      try {
-        const r = await fetch("/api/categories", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        if (alive)
-          setCategories(
-            items.map((x: any) => ({ slug: x.slug, label: x.label }))
-          );
-      } catch (e) {
-        if (alive) setCatError((e as Error).message);
-      } finally {
-        if (alive) setCatLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setTopLoading(true);
-      setTopError(null);
-      try {
-        const r = await fetch("/api/topics", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        if (alive)
-          setTopics(
-            items.map((x: any) => ({
-              slug: x.slug,
-              label: x.label,
-              category: x.category ?? null,
-            }))
-          );
-      } catch (e) {
-        if (alive) setTopError((e as Error).message);
-      } finally {
-        if (alive) setTopLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const {
+    data: topics,
+    loading: topLoading,
+    error: topError,
+  } = useTopicData();
 
   const categoryOptions = useMemo(
     () => [

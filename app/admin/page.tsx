@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import Select from "@/components/Select";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
+import { useCatalogData } from "@/lib/hooks/useCatalogData";
+import { useTopicData } from "@/lib/hooks/useTopicData";
 
 // 固定カテゴリ + サブジャンル（旧仕様）
 // 現在はDBから取得するため空にする
@@ -11,8 +13,6 @@ const categories: {
   label: string;
   subgenres: { slug: string; label: string }[];
 }[] = [];
-type CategoryItem = { slug: string; label: string };
-type TopicItem = { slug: string; label: string; category?: string | null };
 
 const QuestionSchema = z.object({
   id: z.string(),
@@ -35,10 +35,12 @@ function genId() {
 }
 
 export default function AdminPage() {
-  // DB categories
-  const [dbCategories, setDbCategories] = useState<CategoryItem[]>([]);
-  const [catLoading, setCatLoading] = useState(false);
-  const [catError, setCatError] = useState<string | null>(null);
+  const {
+    data: dbCategories,
+    loading: catLoading,
+    error: catError,
+    refetch: refetchCategories,
+  } = useCatalogData();
 
   // Selected category for manual add (fallback to first when loaded)
   const [category, setCategory] = useState<string>("");
@@ -103,78 +105,25 @@ export default function AdminPage() {
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsFilter, setLogsFilter] = useState("");
   // サブジャンル（DB: topics）
-  const [topics, setTopics] = useState<TopicItem[]>([]);
-  const [topicsLoading, setTopicsLoading] = useState(false);
-  const [topicsError, setTopicsError] = useState<string | null>(null);
+  const {
+    data: topics,
+    loading: topicsLoading,
+    error: topicsError,
+    refetch: refetchTopics,
+  } = useTopicData();
 
-  // Load categories from DB
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      setCatLoading(true);
-      setCatError(null);
-      try {
-        const r = await fetch("/api/categories", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        const mapped = items.map((x: any) => ({
-          slug: x.slug,
-          label: x.label,
-        })) as CategoryItem[];
-        if (alive) {
-          setDbCategories(mapped);
-          // Initialize selects if current values are not in the new list
-          if (mapped.length) {
-            if (!mapped.some((c) => c.slug === genGenre))
-              setGenGenre(mapped[0].slug);
-            if (!category || !mapped.some((c) => c.slug === category))
-              setCategory(mapped[0].slug);
-            if (
-              !topicCatForAdd ||
-              !mapped.some((c) => c.slug === topicCatForAdd)
-            )
-              setTopicCatForAdd(mapped[0].slug);
-          }
-        }
-      } catch (e) {
-        if (alive) setCatError((e as Error).message);
-      } finally {
-        if (alive) setCatLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // サブジャンル一覧を読み込み
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setTopicsLoading(true);
-      setTopicsError(null);
-      try {
-        const r = await fetch("/api/topics", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        const mapped = items.map((x: any) => ({
-          slug: x.slug,
-          label: x.label,
-          category: x.category ?? null,
-        })) as TopicItem[];
-        if (alive) setTopics(mapped);
-      } catch (e) {
-        if (alive) setTopicsError((e as Error).message);
-      } finally {
-        if (alive) setTopicsLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (!dbCategories.length) return;
+    if (!dbCategories.some((c) => c.slug === genGenre)) {
+      setGenGenre(dbCategories[0].slug);
+    }
+    if (!category || !dbCategories.some((c) => c.slug === category)) {
+      setCategory(dbCategories[0].slug);
+    }
+    if (!topicCatForAdd || !dbCategories.some((c) => c.slug === topicCatForAdd)) {
+      setTopicCatForAdd(dbCategories[0].slug);
+    }
+  }, [dbCategories]);
 
   // 選択中のサブジャンルに応じて表示用ラベルを同期
   const selectedGenTopic = useMemo(
@@ -274,24 +223,7 @@ export default function AdminPage() {
       setInfo(`カテゴリーを追加しました: ${data.item?.label || newCatLabel}`);
       setNewCatSlug("");
       setNewCatLabel("");
-      // Refresh categories after successful addition
-      try {
-        setCatLoading(true);
-        const r2 = await fetch("/api/categories", { cache: "no-store" });
-        const j2 = await r2.json();
-        if (r2.ok && Array.isArray(j2?.items)) {
-          const mapped = j2.items.map((x: any) => ({
-            slug: x.slug,
-            label: x.label,
-          })) as CategoryItem[];
-          setDbCategories(mapped);
-          if (mapped.length && !mapped.some((c) => c.slug === genGenre))
-            setGenGenre(mapped[0].slug);
-        }
-      } catch {
-      } finally {
-        setCatLoading(false);
-      }
+      refetchCategories();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -563,22 +495,7 @@ export default function AdminPage() {
       setNewTopicSlug("");
       setNewTopicLabel("");
       // 追加後にサブジャンル一覧を再取得
-      try {
-        setTopicsLoading(true);
-        const r2 = await fetch("/api/topics", { cache: "no-store" });
-        const j2 = await r2.json();
-        if (r2.ok && Array.isArray(j2?.items)) {
-          const mapped = j2.items.map((x: any) => ({
-            slug: x.slug,
-            label: x.label,
-            category: x.category ?? null,
-          })) as TopicItem[];
-          setTopics(mapped);
-        }
-      } catch {
-      } finally {
-        setTopicsLoading(false);
-      }
+      refetchTopics();
     } catch (e) {
       setError((e as Error).message);
     } finally {
