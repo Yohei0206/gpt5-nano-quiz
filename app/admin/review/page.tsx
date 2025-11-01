@@ -29,6 +29,7 @@ type QuestionReport = {
   mode: "single" | "versus";
   context: Record<string, unknown> | null;
   created_at: string;
+  handled?: boolean;
 };
 
 const QUESTION_PAGE_SIZE = 20;
@@ -336,6 +337,18 @@ export default function AdminReviewPage() {
       if (!res.ok) {
         throw new Error(data?.error || `HTTP ${res.status}`);
       }
+      try {
+        await fetch("/api/admin/question-reports/resolve", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(adminToken ? { "x-admin-token": adminToken } : {}),
+          },
+          body: JSON.stringify({ questionId: idStr }),
+        });
+      } catch {
+        // resolve API が失敗しても致命的ではないため握りつぶす
+      }
       const updated = data?.item;
       if (!updated) throw new Error("更新結果を取得できませんでした。");
       const questionIdStr = String(questionId);
@@ -367,6 +380,27 @@ export default function AdminReviewPage() {
           };
         })
       );
+      try {
+        await fetch("/api/admin/question-reports/resolve", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(adminToken ? { "x-admin-token": adminToken } : {}),
+          },
+          body: JSON.stringify({ questionId: questionIdStr }),
+        });
+        let removed = 0;
+        setReportItems((prev) => {
+          const filtered = prev.filter((item) => item.questionId !== questionIdStr);
+          removed = prev.length - filtered.length;
+          return filtered;
+        });
+        if (removed > 0) {
+          setReportTotal((prev) => (prev > 0 ? Math.max(0, prev - removed) : prev));
+        }
+      } catch {
+        // 非致命的: ログなどは将来検討
+      }
       setQuestionInfo("問題を更新しました。");
       cancelQuestionEdit();
     } catch (e) {
