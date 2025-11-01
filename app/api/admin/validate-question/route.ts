@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { logJsonLine } from "@/lib/logger";
-import { matchAnswerToChoices } from "@/lib/validation";
+import { matchAnswerToChoices, normalizeForChoiceCompare } from "@/lib/validation";
 
 export const runtime = "nodejs";
 const budget = 600;
@@ -330,9 +330,38 @@ export async function POST(req: NextRequest) {
       t.includes("all of the above")
     );
   }
+  const normalizedAnswers = items.map((q) => {
+    const choice = q.choices?.[q.answerIndex];
+    return typeof choice === "string" && choice.length > 0
+      ? normalizeForChoiceCompare(choice)
+      : null;
+  });
+  const duplicateAnswerKeys = (() => {
+    const counts = new Map<string, number>();
+    for (const key of normalizedAnswers) {
+      if (!key) continue;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const dup = new Set<string>();
+    for (const [key, count] of counts) {
+      if (count > 1) dup.add(key);
+    }
+    return dup;
+  })();
+
   const results: any[] = [];
-  for (const q of items) {
+  for (let index = 0; index < items.length; index++) {
+    const q = items[index];
     try {
+      const normalizedAnswer = normalizedAnswers[index];
+      if (normalizedAnswer && duplicateAnswerKeys.has(normalizedAnswer)) {
+        results.push({
+          id: q.id ?? null,
+          pass: false,
+          reason: "他の問題と正解が重複",
+        });
+        continue;
+      }
       // 先に静的品質チェック
       const jaPrompt = japaneseRatio(q.prompt) >= 0.3;
       const uniqueChoices = (() => {
