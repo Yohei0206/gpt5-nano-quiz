@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   const rows = Array.isArray(data) ? data : [];
   if (rows.length === 0) return json({ updated: 0, distribution: [0, 0, 0, 0] });
 
-  const updates: { id: number; choices: string[]; answer_index: number }[] = [];
+  const updates: { id: unknown; choices: string[]; answer_index: number }[] = [];
   const distribution = [0, 0, 0, 0];
   for (let i = 0; i < rows.length; i++) {
     const r: any = rows[i];
@@ -54,14 +54,25 @@ export async function POST(req: NextRequest) {
       newChoices[targetIdx] = newChoices[currentIdx];
       newChoices[currentIdx] = tmp;
     }
-    updates.push({ id: Number(r.id), choices: newChoices, answer_index: targetIdx });
+    // Keep original id type to avoid bigint precision issues
+    updates.push({ id: r.id, choices: newChoices, answer_index: targetIdx });
     distribution[targetIdx] += 1;
   }
 
   if (updates.length === 0) return json({ updated: 0, distribution });
 
-  const { error: uerr } = await supabase.from("questions").upsert(updates);
-  if (uerr) return json({ error: uerr.message }, 500);
-  return json({ updated: updates.length, distribution });
+  // Per-row updates to avoid bigint and constraint issues
+  let ok = 0;
+  const failures: { id: unknown; error: string }[] = [];
+  for (const u of updates) {
+    const { error } = await supabase
+      .from("questions")
+      .update({ choices: u.choices, answer_index: u.answer_index })
+      .eq("id", u.id);
+    if (error) failures.push({ id: u.id, error: error.message });
+    else ok++;
+  }
+  if (ok === 0) return json({ error: "No updates succeeded", failed: failures.length, failures }, 500);
+  return json({ updated: ok, distribution, failed: failures.length, failures }, 200);
 }
 

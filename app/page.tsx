@@ -195,15 +195,13 @@ function HomeInner() {
           </div>
           <div>
             <label className="block text-sm mb-1">出題数</label>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              value={count}
-              onChange={(e) =>
-                setCount(Math.max(1, Math.min(10, Number(e.target.value) || 1)))
-              }
+            <Select
+              value={String(count)}
+              onChange={(v) => setCount(Math.max(1, Math.min(10, Number(v) || 1)))}
+              options={Array.from({ length: 10 }, (_, i) => {
+                const n = i + 1;
+                return { value: String(n), label: String(n) };
+              })}
             />
           </div>
           <div className="flex items-end">
