@@ -29,6 +29,9 @@ export type VsState = {
     state: MatchState;
     current_index?: number | null;
     locked_by?: string | null;
+    category?: string;
+    difficulty?: string;
+    question_count?: number;
   } | null;
   players: VsPlayer[];
   question?: VsQuestion | null;

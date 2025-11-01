@@ -125,29 +125,64 @@ export async function POST(req: NextRequest) {
 // 確認用: 直近の問題を取得（読み取りは anon でOK）
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const category = searchParams.get("category") || undefined;
-  const limit = Math.min(
-    100,
-    Math.max(1, Number(searchParams.get("limit") || 20))
-  );
+  const categoryParam = searchParams.get("category");
+  const category =
+    categoryParam && categoryParam !== "all" ? categoryParam : undefined;
+  const difficultyParam = searchParams.get("difficulty");
+  const difficulty =
+    difficultyParam &&
+    ["easy", "normal", "hard"].includes(difficultyParam.toLowerCase())
+      ? (difficultyParam.toLowerCase() as "easy" | "normal" | "hard")
+      : undefined;
+  const search = (searchParams.get("q") || "").trim();
+  const limitRaw = Number(searchParams.get("limit") || 20);
+  const limit = Math.min(100, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 20));
+  const pageRaw = Number(searchParams.get("page") || 1);
+  const page = Math.max(1, Number.isFinite(pageRaw) ? Math.floor(pageRaw) : 1);
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
 
   const supabase = serverSupabaseAnon();
   try {
-    console.log("[admin-questions][GET] 取得を開始します", { category, limit });
+    console.log("[admin-questions][GET] 取得を開始します", {
+      category,
+      difficulty,
+      search,
+      limit,
+      page,
+    });
   } catch {}
+
   let query = supabase
     .from("questions")
-    .select("id,prompt,category,difficulty,source,created_at")
+    .select(
+      "id,prompt,choices,answer_index,explanation,category,difficulty,source,subgenre,created_at",
+      { count: "exact" }
+    )
     .order("created_at", { ascending: false })
-    .limit(limit);
-  if (category) query = query.eq("category", category);
+    .range(from, to);
 
-  const { data, error } = await query;
+  if (category) query = query.eq("category", category);
+  if (difficulty) query = query.eq("difficulty", difficulty);
+  if (search) {
+    const sanitized = search.replace(/[%_]/g, "\\$&");
+    const like = `%${sanitized}%`;
+    const conditions = [`prompt.ilike.${like}`];
+    if (/^\d+$/.test(search)) {
+      conditions.push(`id.eq.${search}`);
+    }
+    query = query.or(conditions.join(","));
+  }
+
+  const { data, error, count } = await query;
   if (error) {
     try {
       console.log("[admin-questions][GET] error:", error.message, {
         category,
+        difficulty,
+        search,
         limit,
+        page,
       });
     } catch {}
     return new Response(JSON.stringify({ error: error.message }), {
@@ -155,14 +190,45 @@ export async function GET(req: NextRequest) {
       headers: { "content-type": "application/json" },
     });
   }
+  const items = (data ?? []).map((row: any) => ({
+    id: row.id,
+    prompt: row.prompt,
+    choices: Array.isArray(row.choices) ? row.choices : [],
+    answerIndex:
+      typeof row.answer_index === "number" ? row.answer_index : null,
+    explanation: row.explanation ?? null,
+    category: row.category,
+    difficulty: row.difficulty,
+    source: row.source,
+    subgenre: row.subgenre ?? null,
+    created_at: row.created_at,
+  }));
+  const total = typeof count === "number" ? count : items.length;
+  const hasMore =
+    typeof count === "number" ? total > to + 1 : items.length === limit;
   try {
-    const items = data ?? [];
-    const preview = items.slice(0, 3).map((x: any) => ({ id: x.id, prompt: x.prompt?.slice(0, 30), category: x.category, difficulty: x.difficulty }));
-    console.log("[admin-questions][GET] success:", { category, limit, returned: items.length });
+    const preview = items.slice(0, 3).map((x: any) => ({
+      id: x.id,
+      prompt: x.prompt?.slice(0, 30),
+      category: x.category,
+      difficulty: x.difficulty,
+    }));
+    console.log("[admin-questions][GET] success:", {
+      category,
+      difficulty,
+      search,
+      limit,
+      page,
+      returned: items.length,
+      total,
+    });
     console.log("[admin-questions][GET] レスポンスの中身 (先頭3件プレビュー):", preview);
   } catch {}
-  return new Response(JSON.stringify({ items: data ?? [] }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({ items, total, limit, page, hasMore }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }
+  );
 }
