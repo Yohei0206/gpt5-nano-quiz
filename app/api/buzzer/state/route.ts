@@ -64,10 +64,42 @@ export async function GET(req: NextRequest) {
     }
   } catch {}
 
+  let history: any[] = [];
+  if (m.state === "finished") {
+    const { data: refs } = await svc
+      .from("match_questions")
+      .select(
+        "order_no, questions:question_id(id,prompt,choices,answer_index,explanation)",
+      )
+      .eq("match_id", matchId)
+      .order("order_no", { ascending: true });
+    if (refs && Array.isArray(refs)) {
+      history = refs
+        .map((row: any) => {
+          const q = row?.questions;
+          if (!q) return null;
+          const rawAnswer = (q as any)?.answer_index;
+          const numericAnswer =
+            typeof rawAnswer === "number" ? rawAnswer : Number(rawAnswer);
+          const base = {
+            id: q.id,
+            prompt: q.prompt,
+            choices: Array.isArray(q.choices) ? q.choices : [],
+            explanation: q.explanation ?? null,
+          };
+          return Number.isFinite(numericAnswer)
+            ? { ...base, answerIndex: Number(numericAnswer) }
+            : base;
+        })
+        .filter(Boolean);
+    }
+  }
+
   return json({
     match: m,
     players: players ?? [],
     question,
     lastAnswer,
+    history,
   });
 }

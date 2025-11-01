@@ -71,6 +71,36 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 -- ==========================================================
+-- Question reports (user feedback)
+-- ==========================================================
+
+create table if not exists public.question_reports (
+  id bigint generated always as identity primary key,
+  question_id text,
+  prompt text not null,
+  choices jsonb not null,
+  answer_index int,
+  explanation text,
+  category text,
+  mode text not null,
+  context jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_question_reports_mode on public.question_reports (mode);
+create index if not exists idx_question_reports_created on public.question_reports (created_at);
+
+alter table public.question_reports enable row level security;
+do $$ begin
+  create policy "question_reports_read_all" on public.question_reports
+  for select using (true);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "question_reports_write_service" on public.question_reports
+  for all to service_role using (true) with check (true);
+exception when duplicate_object then null; end $$;
+
+-- ==========================================================
 -- Master tables: categories, difficulties
 -- ==========================================================
 

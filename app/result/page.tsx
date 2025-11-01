@@ -2,6 +2,7 @@
 import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuiz } from "@/lib/store";
+import { ReportIssueButton } from "@/components/ReportIssueButton";
 
 function ResultInner() {
   const router = useRouter();
@@ -47,6 +48,24 @@ function ResultInner() {
               {q.explanation && (
                 <div className="mt-2 text-white/80 text-sm">解説: {q.explanation}</div>
               )}
+              <ReportIssueButton
+                className="mt-3"
+                mode="single"
+                question={{
+                  id: q.id,
+                  prompt: q.prompt,
+                  choices: [...q.choices],
+                  answerIndex: q.answerIndex,
+                  explanation: q.explanation ?? null,
+                  category: q.category,
+                }}
+                context={{
+                  questionIndex: i,
+                  userAnswer: answers[i],
+                  correctAnswer: q.answerIndex,
+                  correct: answers[i] === q.answerIndex,
+                }}
+              />
             </div>
           );
         })}
