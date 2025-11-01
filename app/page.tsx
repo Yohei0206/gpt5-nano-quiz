@@ -1,10 +1,14 @@
-﻿"use client";
-import { useEffect, useMemo, useState } from "react";
+"use client";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Select from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { useQuiz } from "@/lib/store";
 import type { Difficulty } from "@/lib/types";
+import { useRemoteCollection } from "@/lib/hooks/useRemoteCollection";
+import { generateQuestions } from "@/lib/api/generateQuestions";
+
 type CategoryItem = { slug: string; label: string };
+type TopicItem = { slug: string; label: string; category?: string | null };
 
 function HomeInner() {
   const router = useRouter();
@@ -14,68 +18,51 @@ function HomeInner() {
   const [count, setCount] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [catLoading, setCatLoading] = useState(false);
-  const [catError, setCatError] = useState<string | null>(null);
-  type TopicItem = { slug: string; label: string; category?: string | null };
   const [title, setTitle] = useState("");
-  const [topics, setTopics] = useState<TopicItem[]>([]);
-  const [topLoading, setTopLoading] = useState(false);
-  const [topError, setTopError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setCatLoading(true);
-      setCatError(null);
-      try {
-        const r = await fetch("/api/categories", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        if (alive)
-          setCategories(
-            items.map((x: any) => ({ slug: x.slug, label: x.label }))
-          );
-      } catch (e) {
-        if (alive) setCatError((e as Error).message);
-      } finally {
-        if (alive) setCatLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
+  const categoryMapper = useCallback((raw: unknown): CategoryItem | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const item = raw as { slug?: unknown; label?: unknown };
+    if (typeof item.slug !== "string" || typeof item.label !== "string") {
+      return null;
+    }
+    return { slug: item.slug, label: item.label };
+  }, []);
+
+  const {
+    items: categories,
+    loading: catLoading,
+    error: catError,
+  } = useRemoteCollection<CategoryItem>({
+    url: "/api/categories",
+    mapItem: categoryMapper,
+  });
+
+  const topicMapper = useCallback((raw: unknown): TopicItem | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const item = raw as {
+      slug?: unknown;
+      label?: unknown;
+      category?: unknown;
+    };
+    if (typeof item.slug !== "string" || typeof item.label !== "string") {
+      return null;
+    }
+    return {
+      slug: item.slug,
+      label: item.label,
+      category: typeof item.category === "string" ? item.category : null,
     };
   }, []);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setTopLoading(true);
-      setTopError(null);
-      try {
-        const r = await fetch("/api/topics", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        if (alive)
-          setTopics(
-            items.map((x: any) => ({
-              slug: x.slug,
-              label: x.label,
-              category: x.category ?? null,
-            }))
-          );
-      } catch (e) {
-        if (alive) setTopError((e as Error).message);
-      } finally {
-        if (alive) setTopLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const {
+    items: topics,
+    loading: topLoading,
+    error: topError,
+  } = useRemoteCollection<TopicItem>({
+    url: "/api/topics",
+    mapItem: topicMapper,
+  });
 
   const categoryOptions = useMemo(
     () => [
@@ -85,33 +72,28 @@ function HomeInner() {
     [categories]
   );
 
-  // カテゴリ変更時、サブジャンル選択はリセット
-  useEffect(() => {
-    const matched = topics.find((t) => t.label === title && (t.category ?? "") === (category || ""));
-    if (!matched) setTitle("");
-  }, [category, topics]);
+  const filteredTopics = useMemo(
+    () => topics.filter((t) => (t.category ?? "") === (category || "")),
+    [category, topics]
+  );
 
-  async function start() {
+  useEffect(() => {
+    const matched = filteredTopics.find((t) => t.label === title);
+    if (!matched) setTitle("");
+  }, [category, filteredTopics, title]);
+
+  const start = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      const payload: any = { difficulty, count, language: "ja" };
-      if (category) payload.category = category;
-      if (title.trim()) payload.title = title.trim();
-      const r = await fetch("/api/generate-questions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+      const questions = await generateQuestions({
+        difficulty,
+        count,
+        language: "ja",
+        category: category || undefined,
+        title,
       });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new Error(
-          "問題が取得できませんでした。条件を変えて再試行してください。"
-        );
-      }
-      setQuestions(data);
+      setQuestions(questions);
       router.push("/play");
     } catch (e) {
       setError((e as Error).message);
@@ -119,7 +101,7 @@ function HomeInner() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [category, count, difficulty, reset, router, setQuestions, title]);
 
   return (
     <div className="space-y-6">
@@ -152,9 +134,7 @@ function HomeInner() {
                 onChange={(v) => setTitle(v)}
                 options={[
                   { value: "", label: "未指定" },
-                  ...topics
-                    .filter((t) => (t.category ?? "") === (category || ""))
-                    .map((t) => ({ value: t.label, label: t.label })),
+                  ...filteredTopics.map((t) => ({ value: t.label, label: t.label })),
                 ]}
               />
             </div>
