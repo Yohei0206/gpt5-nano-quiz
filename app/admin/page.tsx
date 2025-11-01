@@ -620,6 +620,11 @@ export default function AdminPage() {
           へ反映してください。
         </p>
       </header>
+      <div className="flex justify-end">
+        <a className="btn btn-ghost btn-sm" href="/admin/review">
+          問題一覧・修正依頼
+        </a>
+      </div>
       <div className="card p-5 grid gap-4">
         <div className="font-semibold">カテゴリー管理</div>
         <div className="grid sm:grid-cols-3 gap-3 items-end">
