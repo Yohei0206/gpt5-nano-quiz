@@ -42,6 +42,42 @@ function genId() {
   );
 }
 
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object") return value as Record<string, unknown>;
+  return null;
+}
+
+function readFirstMessage(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = readFirstMessage(entry);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  const record = toRecord(value);
+  if (!record) return null;
+  for (const key of ["message", "error", "detail"]) {
+    const nested = readFirstMessage(record[key]);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function extractErrorMessage(data: unknown): string | null {
+  const record = toRecord(data);
+  if (!record) return readFirstMessage(data);
+  for (const key of ["error", "message", "body", "detail", "details"]) {
+    const message = readFirstMessage(record[key]);
+    if (message) return message;
+  }
+  return null;
+}
+
 export default function AdminPage() {
   // DB categories
   const [dbCategories, setDbCategories] = useState<CategoryItem[]>([]);
@@ -269,7 +305,10 @@ export default function AdminPage() {
       });
       const data = await r.json();
       if (!r.ok)
-        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          extractErrorMessage(data) ??
+            `追加に失敗しました (HTTP ${r.status})`
+        );
       setInfo(`カテゴリーを追加しました: ${data.item?.label || newCatLabel}`);
       setNewCatSlug("");
       setNewCatLabel("");
@@ -324,7 +363,10 @@ export default function AdminPage() {
       });
       const data = await r.json();
       if (!r.ok)
-        throw new Error(data?.error || `保存に失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          extractErrorMessage(data) ??
+            `保存に失敗しました (HTTP ${r.status})`
+        );
       setInfo(`保存しました（${data.inserted}件）。`);
       await loadPreview();
     } catch (e) {
@@ -354,18 +396,19 @@ export default function AdminPage() {
           language: "ja",
           ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
         }),
-      });
+        });
       const data = await r.json();
       if (!r.ok) {
+        const record = toRecord(data);
+        const errorMessage = extractErrorMessage(data);
+        const uiMessage = errorMessage ?? "生成に失敗しました";
         // サーバが raw を返す場合は詳細を表示
-        if (data?.raw) {
-          setError(
-            (data?.error || "生成に失敗しました") +
-              "\nraw: " +
-              String(data.raw).slice(0, 500)
-          );
+        if (record?.raw) {
+          setError(`${uiMessage}\nraw: ${String(record.raw).slice(0, 500)}`);
         }
-        throw new Error(data?.error || `生成に失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          errorMessage ?? `生成に失敗しました (HTTP ${r.status})`
+        );
       }
       setInfo(`生成・保存しました（${data.inserted}件）。`);
       await loadPreview();
@@ -396,10 +439,13 @@ export default function AdminPage() {
           language: "ja",
           ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
         }),
-      });
+        });
       const data = await r.json();
       if (!r.ok)
-        throw new Error(data?.error || `生成に失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          extractErrorMessage(data) ??
+            `生成に失敗しました (HTTP ${r.status})`
+        );
       // 生成結果をプレビュー欄に流す
       setPreview(
         (data.items || []).map((q: any) => ({
@@ -449,7 +495,10 @@ export default function AdminPage() {
           body: JSON.stringify(payload),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+        if (!r.ok)
+          throw new Error(
+            extractErrorMessage(data) ?? `HTTP ${r.status}`
+          );
         return data as { inserted?: number };
       });
       const results = await Promise.allSettled(jobs);
@@ -487,7 +536,10 @@ export default function AdminPage() {
       const r = await fetch(`/api/admin/questions?${qs.toString()}`);
       const data = await r.json();
       if (!r.ok)
-        throw new Error(data?.error || `取得に失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          extractErrorMessage(data) ??
+            `取得に失敗しました (HTTP ${r.status})`
+        );
       setPreview((data.items || []) as PreviewItem[]);
     } catch (e) {
       setError((e as Error).message);
@@ -517,7 +569,10 @@ export default function AdminPage() {
       });
       const data = await r.json();
       if (!r.ok)
-        throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          extractErrorMessage(data) ??
+            `失敗しました (HTTP ${r.status})`
+        );
       setInfo(
         `回答位置を再配置しました（更新 ${data.updated} 件、分布 ${(
           data.distribution || []
@@ -560,7 +615,10 @@ export default function AdminPage() {
       });
       const data = await r.json();
       if (!r.ok)
-        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+        throw new Error(
+          extractErrorMessage(data) ??
+            `追加に失敗しました (HTTP ${r.status})`
+        );
       setInfo(
         `サブジャンルを追加しました: ${data.item?.label || newTopicLabel}`
       );
