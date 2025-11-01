@@ -157,6 +157,19 @@ export async function DELETE(
   if (!data || data.length === 0)
     return json({ error: "Question not found" }, 404);
 
-  return json({ deleted: data.length }, 200);
+  const idStr = idParam.trim();
+  const { error: reportError, data: removedReports } = await supabase
+    .from("question_reports")
+    .delete()
+    .eq("question_id", idStr)
+    .select("id");
+
+  if (reportError)
+    return json({ error: reportError.message || "Failed to delete edit requests" }, 500);
+
+  return json(
+    { deleted: data.length, deletedReports: removedReports?.length ?? 0 },
+    200
+  );
 }
 

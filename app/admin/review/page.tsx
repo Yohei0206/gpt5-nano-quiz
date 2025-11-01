@@ -403,9 +403,18 @@ export default function AdminReviewPage() {
       if (!res.ok) {
         throw new Error(data?.error || `HTTP ${res.status}`);
       }
-      setQuestionItems((prev) =>
-        prev.filter((item) => String(item.id) !== String(questionId))
-      );
+      setQuestionItems((prev) => prev.filter((item) => String(item.id) !== idStr));
+      setReportItems((prev) => {
+        const filtered = prev.filter(
+          (item) => String(item.questionId ?? "") !== idStr
+        );
+        if (filtered.length !== prev.length) {
+          setReportTotal((prevTotal) =>
+            Math.max(0, prevTotal - (prev.length - filtered.length))
+          );
+        }
+        return filtered;
+      });
       setQuestionInfo("問題を削除しました。");
       if (editingQuestionId === questionId) {
         cancelQuestionEdit();
