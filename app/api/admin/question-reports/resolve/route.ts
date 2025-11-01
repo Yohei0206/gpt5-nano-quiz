@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     query = query.in("id", ids);
   }
 
-  const { error, count } = await query.select("id", { count: "exact" });
+  const { error, count } = await query.select("id", { head: false, count: "exact" });
   if (error) return json({ error: error.message }, 500);
 
   return json({ deleted: count ?? 0 });
