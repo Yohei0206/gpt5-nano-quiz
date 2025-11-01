@@ -212,6 +212,11 @@ export default function AdminPage() {
   const [topicsError, setTopicsError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!supabase) {
+      setSession(null);
+      setAuthChecked(true);
+      return;
+    }
     let mounted = true;
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
@@ -762,11 +767,27 @@ export default function AdminPage() {
   const userEmail = session?.user?.email ?? "";
 
   async function handleSignOut() {
+    if (!supabase) {
+      setError("Supabase クライアントを初期化できませんでした");
+      return;
+    }
     try {
       await supabase.auth.signOut();
     } catch (e) {
       setError((e as Error).message);
     }
+  }
+
+  if (!supabase) {
+    return (
+      <div className="text-center text-sm text-red-300">
+        Supabase クライアントを初期化できませんでした。環境変数
+        <code className="mx-1">NEXT_PUBLIC_SUPABASE_URL</code>
+        と
+        <code className="mx-1">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>
+        を設定してください。
+      </div>
+    );
   }
 
   if (!authChecked) {
