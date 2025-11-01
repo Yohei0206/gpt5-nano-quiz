@@ -37,6 +37,40 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 -- ==========================================================
+-- Rejected questions (没問題) table
+-- ==========================================================
+
+create table if not exists public.rejected_questions (
+  id bigint generated always as identity primary key,
+  question_id text not null,
+  prompt text not null,
+  choices jsonb not null,
+  answer_index int not null check (answer_index between 0 and 3),
+  explanation text,
+  category text not null,
+  subgenre text,
+  difficulty text not null check (difficulty in ('easy','normal','hard')),
+  source text not null,
+  franchise text,
+  reason text not null,
+  stage text not null default 'verify',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_rejected_questions_stage on public.rejected_questions (stage);
+create index if not exists idx_rejected_questions_question_id on public.rejected_questions (question_id);
+
+alter table public.rejected_questions enable row level security;
+do $$ begin
+  create policy "rejected_questions_read_all" on public.rejected_questions
+  for select using (true);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "rejected_questions_write_service" on public.rejected_questions
+  for all to service_role using (true) with check (true);
+exception when duplicate_object then null; end $$;
+
+-- ==========================================================
 -- Master tables: categories, difficulties
 -- ==========================================================
 

@@ -1181,6 +1181,7 @@ export async function POST(req: NextRequest) {
       ...batchDupRejected,
       ...dupRejected,
     ];
+    const verifyRejectedRows: any[] = [];
     for (const q of toVerify) {
       try {
         // 検証は1回のみ実施（最初の検証呼び出しを削除し、単回検証に集約）
@@ -1195,6 +1196,20 @@ export async function POST(req: NextRequest) {
           });
         } else {
           rejected.push({ id: q.id, reason: verdict?.reason ?? "検証失敗" });
+          verifyRejectedRows.push({
+            question_id: q.id,
+            prompt: q.prompt,
+            choices: q.choices,
+            answer_index: q.answerIndex,
+            explanation: q.explanation ?? null,
+            category: q.category,
+            subgenre: q.subgenre ?? null,
+            difficulty: q.difficulty,
+            source: q.source,
+            franchise: body.title?.trim() || null,
+            reason: verdict?.reason ?? "検証失敗",
+            stage: "verify",
+          });
           try {
             await logJsonLine("verify_reject", {
               stage: "verify",
@@ -1205,6 +1220,20 @@ export async function POST(req: NextRequest) {
         }
       } catch {
         rejected.push({ id: q.id, reason: "検証エラー" });
+        verifyRejectedRows.push({
+          question_id: q.id,
+          prompt: q.prompt,
+          choices: q.choices,
+          answer_index: q.answerIndex,
+          explanation: q.explanation ?? null,
+          category: q.category,
+          subgenre: q.subgenre ?? null,
+          difficulty: q.difficulty,
+          source: q.source,
+          franchise: body.title?.trim() || null,
+          reason: "検証エラー",
+          stage: "verify",
+        });
         try {
           await logJsonLine("verify_reject", {
             stage: "verify",
@@ -1227,6 +1256,7 @@ export async function POST(req: NextRequest) {
         {
           items: verified,
           rejected: rejected,
+          verifyRejected: verifyRejectedRows,
           ...(debugFlag
             ? { requestId: (res1 as any).requestId, gpt_debug: gptDebug }
             : {}),
@@ -1237,6 +1267,14 @@ export async function POST(req: NextRequest) {
 
     // 保存
     const supabase = serverSupabaseService();
+    if (verifyRejectedRows.length > 0) {
+      const { error: rejectedInsertError } = await supabase
+        .from("rejected_questions")
+        .insert(verifyRejectedRows);
+      if (rejectedInsertError) {
+        return json({ error: rejectedInsertError.message }, 500);
+      }
+    }
     const rows = verified.map((q) => ({
       // id は送らず、DBの自動採番に任せる
       prompt: q.prompt,
