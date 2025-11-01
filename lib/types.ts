@@ -11,10 +11,3 @@ export interface Question {
   difficulty: Difficulty;
   source: string;
 }
-
-export interface GenerateParams {
-  category: string;
-  difficulty: Difficulty;
-  count: number; // max 10
-  language?: "ja" | "en";
-}
