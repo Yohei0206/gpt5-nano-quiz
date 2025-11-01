@@ -322,8 +322,9 @@ export default function AdminReviewPage() {
     setEditSaving(true);
     setEditError(null);
     try {
+      const questionIdStr = String(questionId);
       const res = await fetch(
-        `/api/admin/questions/${questionId}`,
+        `/api/admin/questions/${questionIdStr}`,
         {
           method: "PATCH",
           headers: {
@@ -344,14 +345,13 @@ export default function AdminReviewPage() {
             "content-type": "application/json",
             ...(adminToken ? { "x-admin-token": adminToken } : {}),
           },
-          body: JSON.stringify({ questionId: idStr }),
+          body: JSON.stringify({ questionId: questionIdStr }),
         });
       } catch {
         // resolve API が失敗しても致命的ではないため握りつぶす
       }
       const updated = data?.item;
       if (!updated) throw new Error("更新結果を取得できませんでした。");
-      const questionIdStr = String(questionId);
       setQuestionItems((prev) =>
         prev.map((item) => {
           if (String(item.id) !== questionIdStr) return item;
