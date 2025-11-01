@@ -3,6 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import Select from "@/components/Select";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
+import {
+  adminErrorDetails,
+  adminErrorMessage,
+  getAdminJson,
+  getJson,
+  postAdminJson,
+} from "@/lib/adminApi";
 
 // 固定カテゴリ + サブジャンル（旧仕様）
 // 現在はDBから取得するため空にする
@@ -107,6 +114,54 @@ export default function AdminPage() {
   const [topicsLoading, setTopicsLoading] = useState(false);
   const [topicsError, setTopicsError] = useState<string | null>(null);
 
+  const normalizeCategories = (items: any[]): CategoryItem[] =>
+    items.map((x: any) => ({
+      slug: x.slug,
+      label: x.label,
+    }));
+
+  const normalizeTopics = (items: any[]): TopicItem[] =>
+    items.map((x: any) => ({
+      slug: x.slug,
+      label: x.label,
+      category: x.category ?? null,
+    }));
+
+  function applyCategories(mapped: CategoryItem[]) {
+    setDbCategories(mapped);
+    if (mapped.length) {
+      if (!mapped.some((c) => c.slug === genGenre)) setGenGenre(mapped[0].slug);
+      if (!category || !mapped.some((c) => c.slug === category))
+        setCategory(mapped[0].slug);
+      if (!topicCatForAdd || !mapped.some((c) => c.slug === topicCatForAdd))
+        setTopicCatForAdd(mapped[0].slug);
+    }
+  }
+
+  async function fetchCategoriesList() {
+    const data = await getJson<{ items?: any[] }>("/api/categories", {
+      cache: "no-store",
+    });
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return normalizeCategories(items);
+  }
+
+  async function fetchTopicsList() {
+    const data = await getJson<{ items?: any[] }>("/api/topics", {
+      cache: "no-store",
+    });
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return normalizeTopics(items);
+  }
+
+  const buildGeneratePayload = () => ({
+    genre: genGenre,
+    count: genCount,
+    difficulty: genDifficulty,
+    language: "ja",
+    ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
+  });
+
   // Load categories from DB
   useEffect(() => {
     let alive = true;
@@ -114,31 +169,12 @@ export default function AdminPage() {
       setCatLoading(true);
       setCatError(null);
       try {
-        const r = await fetch("/api/categories", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        const mapped = items.map((x: any) => ({
-          slug: x.slug,
-          label: x.label,
-        })) as CategoryItem[];
+        const mapped = await fetchCategoriesList();
         if (alive) {
-          setDbCategories(mapped);
-          // Initialize selects if current values are not in the new list
-          if (mapped.length) {
-            if (!mapped.some((c) => c.slug === genGenre))
-              setGenGenre(mapped[0].slug);
-            if (!category || !mapped.some((c) => c.slug === category))
-              setCategory(mapped[0].slug);
-            if (
-              !topicCatForAdd ||
-              !mapped.some((c) => c.slug === topicCatForAdd)
-            )
-              setTopicCatForAdd(mapped[0].slug);
-          }
+          applyCategories(mapped);
         }
       } catch (e) {
-        if (alive) setCatError((e as Error).message);
+        if (alive) setCatError(adminErrorMessage(e));
       } finally {
         if (alive) setCatLoading(false);
       }
@@ -155,18 +191,10 @@ export default function AdminPage() {
       setTopicsLoading(true);
       setTopicsError(null);
       try {
-        const r = await fetch("/api/topics", { cache: "no-store" });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const items = Array.isArray(j?.items) ? j.items : [];
-        const mapped = items.map((x: any) => ({
-          slug: x.slug,
-          label: x.label,
-          category: x.category ?? null,
-        })) as TopicItem[];
+        const mapped = await fetchTopicsList();
         if (alive) setTopics(mapped);
       } catch (e) {
-        if (alive) setTopicsError((e as Error).message);
+        if (alive) setTopicsError(adminErrorMessage(e));
       } finally {
         if (alive) setTopicsLoading(false);
       }
@@ -255,45 +283,32 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch("/api/admin/categories", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({
+      const data = await postAdminJson<{ item?: { label?: string } }>(
+        "/api/admin/categories",
+        {
           slug: newCatSlug.trim(),
           label: newCatLabel.trim(),
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
-      setInfo(`カテゴリーを追加しました: ${data.item?.label || newCatLabel}`);
+        }
+      );
+      setInfo(
+        `カテゴリーを追加しました: ${
+          data?.item?.label || newCatLabel
+        }`
+      );
       setNewCatSlug("");
       setNewCatLabel("");
       // Refresh categories after successful addition
       try {
         setCatLoading(true);
-        const r2 = await fetch("/api/categories", { cache: "no-store" });
-        const j2 = await r2.json();
-        if (r2.ok && Array.isArray(j2?.items)) {
-          const mapped = j2.items.map((x: any) => ({
-            slug: x.slug,
-            label: x.label,
-          })) as CategoryItem[];
-          setDbCategories(mapped);
-          if (mapped.length && !mapped.some((c) => c.slug === genGenre))
-            setGenGenre(mapped[0].slug);
-        }
-      } catch {
+        const mapped = await fetchCategoriesList();
+        applyCategories(mapped);
+      } catch (e) {
+        setCatError(adminErrorMessage(e));
       } finally {
         setCatLoading(false);
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setAddingCategory(false);
     }
@@ -312,23 +327,13 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch("/api/admin/questions", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          // 任意: 環境に ADMIN_TOKEN を設定した場合は一致させる
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({ items }),
-      });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `保存に失敗しました (HTTP ${r.status})`);
-      setInfo(`保存しました（${data.inserted}件）。`);
+      const data = await postAdminJson<{ inserted?: number }>(
+        "/api/admin/questions",
+        { items }
+      );
+      setInfo(`保存しました（${data?.inserted ?? 0}件）。`);
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -339,38 +344,28 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch("/api/admin/generate-batch", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({
-          genre: genGenre,
-          count: genCount,
-          difficulty: genDifficulty,
-          language: "ja",
-          ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok) {
-        // サーバが raw を返す場合は詳細を表示
-        if (data?.raw) {
-          setError(
-            (data?.error || "生成に失敗しました") +
-              "\nraw: " +
-              String(data.raw).slice(0, 500)
-          );
-        }
-        throw new Error(data?.error || `生成に失敗しました (HTTP ${r.status})`);
-      }
-      setInfo(`生成・保存しました（${data.inserted}件）。`);
+      const data = await postAdminJson<{ inserted?: number; raw?: unknown }>(
+        "/api/admin/generate-batch",
+        buildGeneratePayload()
+      );
+      setInfo(`生成・保存しました（${data?.inserted ?? 0}件）。`);
       await loadPreview();
     } catch (e) {
-      setError((e as Error).message);
+      const details = adminErrorDetails(e);
+      if (
+        details &&
+        typeof details === "object" &&
+        details !== null &&
+        "raw" in details &&
+        (details as any).raw
+      ) {
+        const raw = (details as any).raw;
+        const rawText =
+          typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+        setError(`${adminErrorMessage(e)}\nraw: ${rawText.slice(0, 500)}`);
+      } else {
+        setError(adminErrorMessage(e));
+      }
     } finally {
       setGenerating(false);
     }
@@ -381,25 +376,10 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch(`/api/admin/generate-batch?dry=1`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({
-          genre: genGenre,
-          count: genCount,
-          difficulty: genDifficulty,
-          language: "ja",
-          ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `生成に失敗しました (HTTP ${r.status})`);
+      const data = await postAdminJson<{ items?: any[] }>(
+        `/api/admin/generate-batch?dry=1`,
+        buildGeneratePayload()
+      );
       // 生成結果をプレビュー欄に流す
       setPreview(
         (data.items || []).map((q: any) => ({
@@ -417,7 +397,7 @@ export default function AdminPage() {
         }件、保存なし）。`
       );
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setGenerating(false);
     }
@@ -429,29 +409,13 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const payload = {
-        genre: genGenre,
-        count: genCount,
-        difficulty: genDifficulty,
-        language: "ja",
-        ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
-      } as const;
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-        ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-          ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN as string }
-          : {}),
-      };
-      const jobs = Array.from({ length: parallelCount }, async () => {
-        const r = await fetch("/api/admin/generate-batch", {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
-        return data as { inserted?: number };
-      });
+      const payload = buildGeneratePayload();
+      const jobs = Array.from({ length: parallelCount }, () =>
+        postAdminJson<{ inserted?: number }>(
+          "/api/admin/generate-batch",
+          payload
+        )
+      );
       const results = await Promise.allSettled(jobs);
       const ok = results.filter(
         (x) => x.status === "fulfilled"
@@ -466,13 +430,22 @@ export default function AdminPage() {
       setInfo(
         `並列実行完了: 成功 ${ok.length} / ${results.length}、保存 ${insertedTotal} 件`
       );
-      if (ng.length) setError(`失敗 ${ng.length} 件（コンソール参照）`);
+      if (ng.length) {
+        const examples = ng
+          .slice(0, 2)
+          .map((r) => adminErrorMessage(r.reason))
+          .filter(Boolean)
+          .join(" / ");
+        setError(
+          `失敗 ${ng.length} 件${examples ? `（例: ${examples}）` : ""}`
+        );
+      }
       try {
         console.log("[admin] parallel results", results);
       } catch {}
       await loadPreview();
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setParallelRunning(false);
     }
@@ -484,13 +457,12 @@ export default function AdminPage() {
       const qs = new URLSearchParams();
       if (genGenre.trim()) qs.set("category", genGenre.trim());
       qs.set("limit", "20");
-      const r = await fetch(`/api/admin/questions?${qs.toString()}`);
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `取得に失敗しました (HTTP ${r.status})`);
-      setPreview(data.items || []);
+      const data = await getAdminJson<{ items?: any[] }>(
+        `/api/admin/questions?${qs.toString()}`
+      );
+      setPreview(data?.items || []);
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setLoadingPreview(false);
     }
@@ -501,19 +473,13 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch("/api/admin/rebalance", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({ category: genGenre, limit: rebalanceLimit }),
+      const data = await postAdminJson<{
+        updated?: number;
+        distribution?: number[];
+      }>("/api/admin/rebalance", {
+        category: genGenre,
+        limit: rebalanceLimit,
       });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `失敗しました (HTTP ${r.status})`);
       setInfo(
         `回答位置を再配置しました（更新 ${data.updated} 件、分布 ${(
           data.distribution || []
@@ -521,7 +487,7 @@ export default function AdminPage() {
       );
       await loadPreview();
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setRebalancing(false);
     }
@@ -540,23 +506,14 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch("/api/admin/topics", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-        body: JSON.stringify({
+      const data = await postAdminJson<{ item?: { label?: string } }>(
+        "/api/admin/topics",
+        {
           slug: newTopicSlug.trim(),
           label: newTopicLabel.trim(),
           category: topicCatForAdd.trim(),
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok)
-        throw new Error(data?.error || `追加に失敗しました (HTTP ${r.status})`);
+        }
+      );
       setInfo(
         `サブジャンルを追加しました: ${data.item?.label || newTopicLabel}`
       );
@@ -565,22 +522,15 @@ export default function AdminPage() {
       // 追加後にサブジャンル一覧を再取得
       try {
         setTopicsLoading(true);
-        const r2 = await fetch("/api/topics", { cache: "no-store" });
-        const j2 = await r2.json();
-        if (r2.ok && Array.isArray(j2?.items)) {
-          const mapped = j2.items.map((x: any) => ({
-            slug: x.slug,
-            label: x.label,
-            category: x.category ?? null,
-          })) as TopicItem[];
-          setTopics(mapped);
-        }
-      } catch {
+        const mapped = await fetchTopicsList();
+        setTopics(mapped);
+      } catch (e) {
+        setTopicsError(adminErrorMessage(e));
       } finally {
         setTopicsLoading(false);
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setAddingTopic(false);
     }
@@ -591,21 +541,15 @@ export default function AdminPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await fetch("/api/admin/test-openai", {
-        headers: {
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-      });
-      const data = await r.json();
-      if (!r.ok || !data.ok)
-        throw new Error(
-          data?.body || data?.error || `失敗しました (HTTP ${r.status})`
-        );
+      const data = await getAdminJson<{ ok?: boolean; body?: string }>(
+        "/api/admin/test-openai"
+      );
+      if (!data?.ok) {
+        throw new Error(data?.body || data?.error || "失敗しました");
+      }
       setInfo("OpenAI接続: OK（呼び出し成功）");
     } catch (e) {
-      setError((e as Error).message);
+      setError(adminErrorMessage(e));
     } finally {
       setTesting(false);
     }
