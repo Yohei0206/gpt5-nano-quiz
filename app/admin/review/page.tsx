@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Select from "@/components/Select";
 
 type CategoryOption = { value: string; label: string };
@@ -85,6 +85,9 @@ export default function AdminReviewPage() {
   const [editForm, setEditForm] = useState<QuestionEditForm | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [pendingEditQuestionId, setPendingEditQuestionId] = useState<
+    string | null
+  >(null);
 
   // Report filters and state
   const [reportSearchInput, setReportSearchInput] = useState("");
@@ -233,7 +236,7 @@ export default function AdminReviewPage() {
     setQuestionPage(1);
   }
 
-  function beginQuestionEdit(question: AdminQuestion) {
+  const beginQuestionEdit = useCallback((question: AdminQuestion) => {
     const normalizedDifficulty =
       typeof question.difficulty === "string"
         ? question.difficulty.toLowerCase()
@@ -259,7 +262,7 @@ export default function AdminReviewPage() {
       subgenre: question.subgenre ?? "",
     });
     setEditError(null);
-  }
+  }, []);
 
   function cancelQuestionEdit() {
     setEditingQuestionId(null);
@@ -368,6 +371,53 @@ export default function AdminReviewPage() {
     } finally {
       setEditSaving(false);
     }
+  }
+
+  useEffect(() => {
+    if (!pendingEditQuestionId) return;
+    const target = questionItems.find(
+      (item) => String(item.id) === pendingEditQuestionId
+    );
+    if (target) {
+      beginQuestionEdit(target);
+      setPendingEditQuestionId(null);
+      setQuestionInfo("修正依頼から該当問題を開きました。");
+      return;
+    }
+    if (!questionLoading) {
+      setPendingEditQuestionId(null);
+      setQuestionError(
+        `修正依頼の問題が見つかりませんでした (ID: ${pendingEditQuestionId})`
+      );
+    }
+  }, [
+    pendingEditQuestionId,
+    questionItems,
+    questionLoading,
+    beginQuestionEdit,
+    setQuestionInfo,
+    setQuestionError,
+  ]);
+
+  function openQuestionFromReport(questionId: string | number | null) {
+    if (!questionId && questionId !== 0) {
+      setQuestionError("対象の問題IDが指定されていません。");
+      return;
+    }
+    const idStr = String(questionId).trim();
+    if (!idStr) {
+      setQuestionError("対象の問題IDが不正です。");
+      return;
+    }
+    setTab("questions");
+    setQuestionSearchInput(idStr);
+    setQuestionCategory("all");
+    setQuestionDifficulty("all");
+    setQuestionFilter({ q: idStr, category: "", difficulty: "" });
+    setQuestionPage(1);
+    setQuestionError(null);
+    setQuestionInfo(null);
+    setPendingEditQuestionId(idStr);
   }
 
   function applyReportFilter() {
@@ -839,6 +889,16 @@ export default function AdminReviewPage() {
                             {key}: {JSON.stringify(value)}
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {item.questionId && (
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          className="btn btn-outline btn-xs"
+                          onClick={() => openQuestionFromReport(item.questionId)}
+                        >
+                          該当の問題を編集
+                        </button>
                       </div>
                     )}
                   </div>
