@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
+import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
 import CategoryManager from "./components/CategoryManager";
@@ -8,6 +10,7 @@ import SubgenreManager from "./components/SubgenreManager";
 import GenerationSection from "./components/GenerationSection";
 import ManualQuestionForm from "./components/ManualQuestionForm";
 import PreviewSection from "./components/PreviewSection";
+import { createBrowserSupabaseClient } from "@/lib/supabase-browser";
 
 type CategoryItem = { slug: string; label: string };
 type TopicItem = { slug: string; label: string; category?: string | null };
@@ -78,7 +81,89 @@ function extractErrorMessage(data: unknown): string | null {
   return null;
 }
 
+function AdminLogin({ supabase }: { supabase: SupabaseClient }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      setInfo("ログインしました");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-sm mx-auto bg-white/5 border border-white/10 rounded-lg p-6 text-sm">
+      <h1 className="text-lg font-semibold mb-4">管理者ログイン</h1>
+      <p className="text-white/60 mb-4">
+        管理者用メールアドレスとパスワードでサインインしてください。
+      </p>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1">
+          <label htmlFor="admin-email" className="block text-white/80">
+            メールアドレス
+          </label>
+          <input
+            id="admin-email"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded bg-white/10 border border-white/20 px-3 py-2 text-white"
+            autoComplete="email"
+          />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="admin-password" className="block text-white/80">
+            パスワード
+          </label>
+          <input
+            id="admin-password"
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full rounded bg-white/10 border border-white/20 px-3 py-2 text-white"
+            autoComplete="current-password"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full rounded bg-white/80 text-black font-semibold py-2 hover:bg-white disabled:opacity-60"
+        >
+          {loading ? "認証中..." : "ログイン"}
+        </button>
+      </form>
+      {error && <p className="text-red-400 mt-4">{error}</p>}
+      {info && <p className="text-emerald-300 mt-4">{info}</p>}
+    </div>
+  );
+}
+
 export default function AdminPage() {
+  const supabase = useMemo(() => createBrowserSupabaseClient(), []);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
   // DB categories
   const [dbCategories, setDbCategories] = useState<CategoryItem[]>([]);
   const [catLoading, setCatLoading] = useState(false);
@@ -126,8 +211,29 @@ export default function AdminPage() {
   const [topicsLoading, setTopicsLoading] = useState(false);
   const [topicsError, setTopicsError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session ?? null);
+      setAuthChecked(true);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, nextSession) => {
+        if (!mounted) return;
+        setSession(nextSession);
+        setAuthChecked(true);
+      }
+    );
+    return () => {
+      mounted = false;
+      listener?.subscription.unsubscribe();
+    };
+  }, [supabase]);
+
   // Load categories from DB
   useEffect(() => {
+    if (!session) return;
     let alive = true;
     (async () => {
       setCatLoading(true);
@@ -143,17 +249,19 @@ export default function AdminPage() {
         })) as CategoryItem[];
         if (alive) {
           setDbCategories(mapped);
-          // Initialize selects if current values are not in the new list
           if (mapped.length) {
-            if (!mapped.some((c) => c.slug === genGenre))
-              setGenGenre(mapped[0].slug);
-            if (!category || !mapped.some((c) => c.slug === category))
-              setCategory(mapped[0].slug);
-            if (
-              !topicCatForAdd ||
-              !mapped.some((c) => c.slug === topicCatForAdd)
-            )
-              setTopicCatForAdd(mapped[0].slug);
+            const firstSlug = mapped[0].slug;
+            setGenGenre((prev) =>
+              prev && mapped.some((c) => c.slug === prev) ? prev : firstSlug
+            );
+            setCategory((prev) => {
+              if (prev && mapped.some((c) => c.slug === prev)) return prev;
+              return firstSlug;
+            });
+            setTopicCatForAdd((prev) => {
+              if (prev && mapped.some((c) => c.slug === prev)) return prev;
+              return firstSlug;
+            });
           }
         }
       } catch (e) {
@@ -165,10 +273,11 @@ export default function AdminPage() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [session]);
 
   // サブジャンル一覧を読み込み
   useEffect(() => {
+    if (!session) return;
     let alive = true;
     (async () => {
       setTopicsLoading(true);
@@ -193,7 +302,7 @@ export default function AdminPage() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [session]);
 
   // 選択中のサブジャンルに応じて表示用ラベルを同期
   const selectedGenTopic = useMemo(
@@ -528,6 +637,7 @@ export default function AdminPage() {
   }
 
   async function loadPreview() {
+    if (!session) return;
     setLoadingPreview(true);
     try {
       const qs = new URLSearchParams();
@@ -549,8 +659,9 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
+    if (!session) return;
     void loadPreview();
-  }, []);
+  }, [session]);
 
   async function rebalanceAnswers() {
     setRebalancing(true);
@@ -648,12 +759,44 @@ export default function AdminPage() {
     }
   }
 
+  const userEmail = session?.user?.email ?? "";
+
+  async function handleSignOut() {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  if (!authChecked) {
+    return (
+      <div className="text-center text-sm text-white/70">
+        認証状態を確認しています...
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AdminLogin supabase={supabase} />;
+  }
+
   const manualCategoriesOptions = categoryOptions.length
     ? categoryOptions
     : [{ value: "", label: "(ジャンル未取得)" }];
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-end gap-3 text-xs text-white/70">
+        {userEmail && <span>{userEmail}</span>}
+        <button
+          type="button"
+          onClick={handleSignOut}
+          className="rounded border border-white/20 px-3 py-1 text-white/80 hover:text-white hover:border-white/40"
+        >
+          サインアウト
+        </button>
+      </div>
       <header className="text-center">
         <h1 className="text-2xl font-bold">管理: 問題作成</h1>
         <p className="text-white/70 text-sm mt-1">

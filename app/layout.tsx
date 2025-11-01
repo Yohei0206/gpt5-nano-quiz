@@ -13,7 +13,6 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const isLocal = process.env.NODE_ENV !== "production";
   return (
     <html lang="ja">
       <body className="min-h-screen">
@@ -31,11 +30,9 @@ export default function RootLayout({
                   対戦
                 </Link>
               </div>
-              {isLocal && (
-                <Link href="/admin" className="text-white/80 hover:text-white">
-                  管理
-                </Link>
-              )}
+              <Link href="/admin" className="text-white/80 hover:text-white">
+                管理
+              </Link>
             </nav>
             {children}
           </div>
