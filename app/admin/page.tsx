@@ -1,18 +1,26 @@
-﻿"use client";
+"use client";
+
 import { useEffect, useMemo, useState } from "react";
-import Select from "@/components/Select";
 import { z } from "zod";
 import type { Difficulty, Question } from "@/lib/types";
+import CategoryManager from "./components/CategoryManager";
+import SubgenreManager from "./components/SubgenreManager";
+import GenerationSection from "./components/GenerationSection";
+import ManualQuestionForm from "./components/ManualQuestionForm";
+import PreviewSection from "./components/PreviewSection";
 
-// 固定カテゴリ + サブジャンル（旧仕様）
-// 現在はDBから取得するため空にする
-const categories: {
-  slug: string;
-  label: string;
-  subgenres: { slug: string; label: string }[];
-}[] = [];
 type CategoryItem = { slug: string; label: string };
 type TopicItem = { slug: string; label: string; category?: string | null };
+
+type PreviewItem = {
+  id: string;
+  prompt: string;
+  category?: string;
+  difficulty?: string;
+  source?: string;
+  created_at?: string;
+  subgenre?: string | null;
+};
 
 const QuestionSchema = z.object({
   id: z.string(),
@@ -42,10 +50,6 @@ export default function AdminPage() {
 
   // Selected category for manual add (fallback to first when loaded)
   const [category, setCategory] = useState<string>("");
-  const subs = useMemo(
-    () => categories.find((c) => c.slug === category)?.subgenres ?? [],
-    [category]
-  );
   const [subgenre, setSubgenre] = useState<string>("");
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const [prompt, setPrompt] = useState("");
@@ -64,6 +68,7 @@ export default function AdminPage() {
     "easy" | "normal" | "hard" | "mixed"
   >("normal");
   const [generating, setGenerating] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [parallelRunning, setParallelRunning] = useState(false);
   const [parallelCount, setParallelCount] = useState<number>(3);
   // 回答番号均等化
@@ -78,30 +83,8 @@ export default function AdminPage() {
   const [newCatSlug, setNewCatSlug] = useState("");
   const [newCatLabel, setNewCatLabel] = useState("");
   const [addingCategory, setAddingCategory] = useState(false);
-  const [preview, setPreview] = useState<any[]>([]);
+  const [preview, setPreview] = useState<PreviewItem[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testPrompt, setTestPrompt] = useState<string>(
-    "JSON配列で4択クイズを2問だけ返してください。各要素は {id,prompt,choices(4),answerIndex} を必須とし、前後に説明やコードフェンスを入れないでください。ジャンルは雑学。"
-  );
-  const [testExtractJson, setTestExtractJson] = useState<boolean>(true);
-  const [testMaxTokens, setTestMaxTokens] = useState<number>(1800);
-  const [testResult, setTestResult] = useState<string>("");
-  const [rawPayload, setRawPayload] = useState<string>(
-    JSON.stringify(
-      {
-        model: "gpt-5-nano",
-        input: "Return an array of 2 quiz items in JSON only.",
-        max_output_tokens: 1000,
-      },
-      null,
-      2
-    )
-  );
-  const [rawResult, setRawResult] = useState<string>("");
-  const [logs, setLogs] = useState<any[] | null>(null);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsFilter, setLogsFilter] = useState("");
   // サブジャンル（DB: topics）
   const [topics, setTopics] = useState<TopicItem[]>([]);
   const [topicsLoading, setTopicsLoading] = useState(false);
@@ -202,6 +185,22 @@ export default function AdminPage() {
       ...list.map((t) => ({ value: t.slug, label: t.label })),
     ];
   }, [topics, genGenre]);
+
+  const categoryOptions = useMemo(
+    () =>
+      dbCategories.map((c) => ({
+        value: c.slug,
+        label: c.label,
+      })),
+    [dbCategories]
+  );
+  const manualTopicOptions = useMemo(() => {
+    const list = topics.filter((t) => (t.category ?? "") === category);
+    return [
+      { value: "", label: "(未指定)" },
+      ...list.map((t) => ({ value: t.slug, label: t.label })),
+    ];
+  }, [topics, category]);
 
   function resetForm() {
     setPrompt("");
@@ -327,6 +326,7 @@ export default function AdminPage() {
       if (!r.ok)
         throw new Error(data?.error || `保存に失敗しました (HTTP ${r.status})`);
       setInfo(`保存しました（${data.inserted}件）。`);
+      await loadPreview();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -377,7 +377,7 @@ export default function AdminPage() {
   }
 
   async function previewGenerate() {
-    setGenerating(true);
+    setPreviewing(true);
     setError(null);
     setInfo(null);
     try {
@@ -419,7 +419,7 @@ export default function AdminPage() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setGenerating(false);
+      setPreviewing(false);
     }
   }
 
@@ -488,13 +488,17 @@ export default function AdminPage() {
       const data = await r.json();
       if (!r.ok)
         throw new Error(data?.error || `取得に失敗しました (HTTP ${r.status})`);
-      setPreview(data.items || []);
+      setPreview((data.items || []) as PreviewItem[]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoadingPreview(false);
     }
   }
+
+  useEffect(() => {
+    void loadPreview();
+  }, []);
 
   async function rebalanceAnswers() {
     setRebalancing(true);
@@ -586,30 +590,9 @@ export default function AdminPage() {
     }
   }
 
-  async function testOpenAI() {
-    setTesting(true);
-    setError(null);
-    setInfo(null);
-    try {
-      const r = await fetch("/api/admin/test-openai", {
-        headers: {
-          ...(process.env.NEXT_PUBLIC_ADMIN_TOKEN
-            ? { "x-admin-token": process.env.NEXT_PUBLIC_ADMIN_TOKEN }
-            : {}),
-        },
-      });
-      const data = await r.json();
-      if (!r.ok || !data.ok)
-        throw new Error(
-          data?.body || data?.error || `失敗しました (HTTP ${r.status})`
-        );
-      setInfo("OpenAI接続: OK（呼び出し成功）");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setTesting(false);
-    }
-  }
+  const manualCategoriesOptions = categoryOptions.length
+    ? categoryOptions
+    : [{ value: "", label: "(ジャンル未取得)" }];
 
   return (
     <div className="space-y-6">
@@ -626,232 +609,109 @@ export default function AdminPage() {
           問題一覧・修正依頼
         </a>
       </div>
-      <div className="card p-5 grid gap-4">
-        <div className="font-semibold">カテゴリー管理</div>
-        <div className="grid sm:grid-cols-3 gap-3 items-end">
-          <div>
-            <label className="block text-sm mb-1">
-              スラッグ（英数字・ハイフン）
-            </label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              placeholder="例: doraemon"
-              value={newCatSlug}
-              onChange={(e) => setNewCatSlug(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">表示名</label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              placeholder="例: ドラえもん"
-              value={newCatLabel}
-              onChange={(e) => setNewCatLabel(e.target.value)}
-            />
-          </div>
-          <div>
-            <button
-              className="btn btn-primary w-full"
-              onClick={addCategory}
-              disabled={addingCategory}
-            >
-              {addingCategory ? "追加中..." : "カテゴリー追加"}
-            </button>
-          </div>
-        </div>
-      </div>
 
-      <div className="card p-5 grid gap-4">
-        <div className="font-semibold">サブジャンル管理</div>
-        <div className="grid sm:grid-cols-4 gap-3 items-end">
-          <div>
-            <label className="block text-sm mb-1">
-              サブジャンルのスラッグ（英数字・ハイフン）
-            </label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              placeholder="例: dragon-ball"
-              value={newTopicSlug}
-              onChange={(e) => setNewTopicSlug(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">サブジャンル名</label>
-            <input
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              placeholder="例: ドラゴンボール"
-              value={newTopicLabel}
-              onChange={(e) => setNewTopicLabel(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">所属ジャンル</label>
-            <Select
-              value={topicCatForAdd}
-              onChange={setTopicCatForAdd}
-              options={dbCategories.map((c) => ({
-                value: c.slug,
-                label: c.label,
-              }))}
-            />
-          </div>
-          <div>
-            <button
-              className="btn btn-primary w-full"
-              onClick={addTopic}
-              disabled={addingTopic}
-            >
-              {addingTopic ? "追加中..." : "サブジャンル追加"}
-            </button>
-          </div>
+      {(info || error) && (
+        <div className="grid gap-2">
+          {info && (
+            <div className="border border-emerald-400/40 bg-emerald-500/10 text-emerald-100 text-sm rounded-md px-4 py-2">
+              {info}
+            </div>
+          )}
+          {error && (
+            <div className="border border-red-400/40 bg-red-500/10 text-red-100 text-sm rounded-md px-4 py-2 whitespace-pre-wrap">
+              {error}
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
-      <div className="card p-5 grid gap-4">
-        <div className="font-semibold">
-          ジャンル指定でGPT生成（直接Supabaseへ保存）
-        </div>
-        <div className="grid sm:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm mb-1">ジャンル</label>
-            <Select
-              value={genGenre}
-              onChange={setGenGenre}
-              options={dbCategories.map((c) => ({
-                value: c.slug,
-                label: c.label,
-              }))}
-            />
-            {catLoading && (
-              <div className="text-xs text-white/60 mt-1">読み込み中...</div>
-            )}
-            {catError && (
-              <div className="text-xs text-red-400 mt-1">{catError}</div>
-            )}
-          </div>
-          <div>
-            <label className="block text-sm mb-1">サブジャンル</label>
-            <Select
-              value={genTitleSlug}
-              onChange={(v) => setGenTitleSlug(v)}
-              options={topicOptions}
-            />
-            {topicsLoading && (
-              <div className="text-xs text-white/60 mt-1">
-                サブジャンル読み込み中...
-              </div>
-            )}
-            {topicsError && (
-              <div className="text-xs text-red-400 mt-1">{topicsError}</div>
-            )}
-          </div>
-          <div>
-            <label className="block text-sm mb-1">件数</label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              value={genCount}
-              onChange={(e) =>
-                setGenCount(
-                  Math.max(1, Math.min(20, Number(e.target.value) || 1))
-                )
-              }
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">難易度</label>
-            <Select
-              value={genDifficulty}
-              onChange={(v) => setGenDifficulty(v as any)}
-              options={[
-                { value: "easy", label: "easy" },
-                { value: "normal", label: "normal" },
-                { value: "hard", label: "hard" },
-                { value: "mixed", label: "mixed" },
-              ]}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">並列数</label>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              value={parallelCount}
-              onChange={(e) =>
-                setParallelCount(
-                  Math.max(1, Math.min(10, Number(e.target.value) || 1))
-                )
-              }
-            />
-          </div>
-        </div>
-        <div className="flex gap-3 justify-end">
-          <button
-            className="btn btn-primary"
-            onClick={generateByGenre}
-            disabled={generating}
-          >
-            {generating ? "生成中..." : "生成して保存"}
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={generateInParallel}
-            disabled={parallelRunning}
-          >
-            {parallelRunning ? "並列中..." : "並列で生成・保存"}
-          </button>
-        </div>
-      </div>
+      <ManualQuestionForm
+        category={category}
+        onChangeCategory={setCategory}
+        subgenre={subgenre}
+        onChangeSubgenre={setSubgenre}
+        difficulty={difficulty}
+        onChangeDifficulty={setDifficulty}
+        prompt={prompt}
+        onChangePrompt={setPrompt}
+        choices={choices}
+        onChangeChoice={(index, value) =>
+          setChoices((prev) => {
+            const next = [...prev];
+            next[index] = value;
+            return next;
+          })
+        }
+        answerIndex={answerIndex}
+        onChangeAnswerIndex={setAnswerIndex}
+        explanation={explanation}
+        onChangeExplanation={setExplanation}
+        onAdd={addItem}
+        onReset={resetForm}
+        onCopyJSON={copyJSON}
+        onSaveAll={saveAll}
+        items={items}
+        onRemove={remove}
+        categories={manualCategoriesOptions}
+        subgenreOptions={manualTopicOptions}
+        saving={saving}
+      />
 
-      <div className="card p-5 grid gap-4">
-        <div className="font-semibold">回答番号の一括並び替え（均等化）</div>
-        <div className="grid sm:grid-cols-3 gap-4 items-end">
-          <div>
-            <label className="block text-sm mb-1">対象ジャンル</label>
-            <Select
-              value={genGenre}
-              onChange={setGenGenre}
-              options={dbCategories.map((c) => ({
-                value: c.slug,
-                label: c.label,
-              }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">対象件数（新しい順）</label>
-            <input
-              type="number"
-              min={1}
-              max={500}
-              className="w-full bg-transparent border border-white/10 rounded-md p-2"
-              value={rebalanceLimit}
-              onChange={(e) =>
-                setRebalanceLimit(
-                  Math.max(1, Math.min(500, Number(e.target.value) || 1))
-                )
-              }
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              className="btn btn-primary w-full"
-              onClick={rebalanceAnswers}
-              disabled={rebalancing}
-            >
-              {rebalancing ? "並び替え中..." : "回答位置を均等化"}
-            </button>
-          </div>
-        </div>
-        <div className="text-xs text-white/60">
-          指定ジャンルの直近N件について、正解の位置を 0→1→2→3→…
-          の順で再配置します。
-          問題本文や選択肢内容は変更せず、選択肢の並びのみ入れ替えます。
-        </div>
-      </div>
+      <CategoryManager
+        slug={newCatSlug}
+        label={newCatLabel}
+        onChangeSlug={setNewCatSlug}
+        onChangeLabel={setNewCatLabel}
+        onSubmit={addCategory}
+        loading={addingCategory}
+      />
+
+      <SubgenreManager
+        slug={newTopicSlug}
+        label={newTopicLabel}
+        category={topicCatForAdd}
+        categories={manualCategoriesOptions}
+        onChangeSlug={setNewTopicSlug}
+        onChangeLabel={setNewTopicLabel}
+        onChangeCategory={setTopicCatForAdd}
+        onSubmit={addTopic}
+        loading={addingTopic}
+      />
+
+      <GenerationSection
+        categories={manualCategoriesOptions}
+        genGenre={genGenre}
+        onChangeGenre={setGenGenre}
+        genTitleSlug={genTitleSlug}
+        onChangeTitleSlug={setGenTitleSlug}
+        topicOptions={topicOptions}
+        genCount={genCount}
+        onChangeCount={setGenCount}
+        genDifficulty={genDifficulty}
+        onChangeDifficulty={setGenDifficulty}
+        parallelCount={parallelCount}
+        onChangeParallelCount={setParallelCount}
+        onGenerate={generateByGenre}
+        onPreview={previewGenerate}
+        onGenerateParallel={generateInParallel}
+        onRebalance={rebalanceAnswers}
+        generating={generating}
+        previewing={previewing}
+        parallelRunning={parallelRunning}
+        rebalancing={rebalancing}
+        catLoading={catLoading}
+        catError={catError}
+        topicsLoading={topicsLoading}
+        topicsError={topicsError}
+        rebalanceLimit={rebalanceLimit}
+        onChangeRebalanceLimit={setRebalanceLimit}
+      />
+
+      <PreviewSection
+        items={preview}
+        loading={loadingPreview}
+        onReload={loadPreview}
+      />
     </div>
   );
 }
