@@ -4,6 +4,7 @@ import Image from "next/image";
 // Default avatar for players without image
 import defaultAvatar from "@/app/public/quiz_man_hatena.png";
 import Select from "@/components/Select";
+import { ReportIssueButton } from "@/components/ReportIssueButton";
 // MP3はpublicからパス指定で再生（importしない）
 import { CATEGORIES } from "@/lib/buzzer/constants";
 import type { VsState } from "@/lib/buzzer/types";
@@ -182,6 +183,7 @@ export default function VersusPage() {
   const someoneAnswering =
     !!lockedBy && lockedBy !== playerId && state?.match?.state === "in_progress";
   const finished = state?.match?.state === "finished";
+  const history = state?.history ?? [];
 
   // Typewriter for question prompt (0.15s per character)
   const [typedPrompt, setTypedPrompt] = useState<string>("");
@@ -515,9 +517,12 @@ export default function VersusPage() {
       )}
 
       {matchId && finished && (
-        <div className="card p-6 grid gap-4 text-center">
-          <h2 className="text-2xl font-bold">対戦終了</h2>
-          <div className="text-white/70">お疲れさまでした！最終結果</div>
+        <div className="card p-6 grid gap-5">
+          <div className="text-center grid gap-1">
+            <h2 className="text-2xl font-bold">対戦終了</h2>
+            <div className="text-white/70">お疲れさまでした！最終結果</div>
+          </div>
+
           <div className="grid gap-2 text-left">
             {[...(state?.players ?? [])]
               .sort((a, b) => (b.score || 0) - (a.score || 0))
@@ -538,7 +543,65 @@ export default function VersusPage() {
                 </div>
               ))}
           </div>
-          <div className="flex items-center justify-center gap-3 mt-2">
+
+          {history.length > 0 && (
+            <div className="text-left">
+              <div className="text-lg font-semibold mb-3">出題された問題</div>
+              <div className="grid gap-4">
+                {history.map((q, idx) => (
+                  <div key={`${q.id ?? idx}`} className="p-4 border border-white/10 rounded-md bg-white/5">
+                    <div className="text-sm text-white/60 mb-1">Q{idx + 1}</div>
+                    <div className="font-semibold mb-2 whitespace-pre-wrap leading-6">
+                      {q.prompt}
+                    </div>
+                    <ul className="grid gap-1 text-sm">
+                      {q.choices.map((choice, choiceIdx) => {
+                        const isCorrect = q.answerIndex === choiceIdx;
+                        return (
+                          <li
+                            key={choiceIdx}
+                            className={`flex items-start gap-2 ${
+                              isCorrect ? "text-green-400" : "text-white/80"
+                            }`}
+                          >
+                            <span className="font-mono">
+                              {String.fromCharCode(65 + choiceIdx)}.
+                            </span>
+                            <span>{choice}</span>
+                            {isCorrect && <span className="text-xs bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded-sm">正解</span>}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {q.explanation && (
+                      <div className="mt-3 text-sm text-white/75">
+                        解説: {q.explanation}
+                      </div>
+                    )}
+                    <ReportIssueButton
+                      className="mt-3"
+                      mode="versus"
+                      question={{
+                        id: q.id ?? undefined,
+                        prompt: q.prompt,
+                        choices: [...q.choices],
+                        answerIndex:
+                          typeof q.answerIndex === "number" ? q.answerIndex : undefined,
+                        explanation: q.explanation ?? null,
+                        category: state?.match?.category ?? null,
+                      }}
+                      context={{
+                        matchId,
+                        questionIndex: idx,
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-center gap-3 mt-1">
             <button className="btn" onClick={resetRoom}>
               もう一度対戦
             </button>

@@ -1,7 +1,11 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { logJsonLine } from "@/lib/logger";
-import { matchAnswerToChoices, normalizeForChoiceCompare } from "@/lib/validation";
+import { serverSupabaseAnon, serverSupabaseService } from "@/lib/supabase";
+import {
+  matchAnswerToChoices,
+  normalizeForChoiceCompare,
+} from "@/lib/validation";
 
 export const runtime = "nodejs";
 const budget = 600;
@@ -330,6 +334,55 @@ export async function POST(req: NextRequest) {
       t.includes("all of the above")
     );
   }
+  function getSupabaseClient() {
+    try {
+      return serverSupabaseService();
+    } catch {
+      try {
+        return serverSupabaseAnon();
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  async function fetchExistingAnswerMap() {
+    const client = getSupabaseClient();
+    if (!client) throw new Error("Supabaseクライアント未設定");
+    const map = new Map<string, Set<string>>();
+    const PAGE_SIZE = 1000;
+    let from = 0;
+    while (true) {
+      const { data, error } = await client
+        .from("questions")
+        .select("id,choices,answer_index")
+        .order("id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) break;
+      for (const row of data) {
+        const idx =
+          typeof (row as any)?.answer_index === "number"
+            ? (row as any).answer_index
+            : -1;
+        const rawChoices = (row as any)?.choices;
+        const choices = Array.isArray(rawChoices) ? rawChoices : [];
+        const answer = choices?.[idx];
+        if (typeof answer !== "string" || !answer) continue;
+        const key = normalizeForChoiceCompare(answer);
+        if (!key) continue;
+        const id = String((row as any)?.id ?? "");
+        if (!id) continue;
+        const set = map.get(key);
+        if (set) set.add(id);
+        else map.set(key, new Set([id]));
+      }
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+    return map;
+  }
+
   const normalizedAnswers = items.map((q) => {
     const choice = q.choices?.[q.answerIndex];
     return typeof choice === "string" && choice.length > 0
@@ -349,10 +402,33 @@ export async function POST(req: NextRequest) {
     return dup;
   })();
 
+  let existingAnswerMap = new Map<string, Set<string>>();
+  let existingAnswerError: string | null = null;
+  if (normalizedAnswers.some((key) => key)) {
+    try {
+      existingAnswerMap = await fetchExistingAnswerMap();
+    } catch (err) {
+      existingAnswerError = (err as Error)?.message || String(err);
+      try {
+        await logJsonLine("verify_duplicate_answer_error", {
+          error: existingAnswerError,
+        });
+      } catch {}
+    }
+  }
+
   const results: any[] = [];
   for (let index = 0; index < items.length; index++) {
     const q = items[index];
     try {
+      if (existingAnswerError) {
+        results.push({
+          id: q.id ?? null,
+          pass: false,
+          reason: "正解重複チェックに失敗",
+        });
+        continue;
+      }
       const normalizedAnswer = normalizedAnswers[index];
       if (normalizedAnswer && duplicateAnswerKeys.has(normalizedAnswer)) {
         results.push({
@@ -361,6 +437,22 @@ export async function POST(req: NextRequest) {
           reason: "他の問題と正解が重複",
         });
         continue;
+      }
+      if (normalizedAnswer) {
+        const existingIds = existingAnswerMap.get(normalizedAnswer);
+        if (existingIds) {
+          const selfId = q.id != null ? String(q.id) : null;
+          const onlySelf =
+            selfId && existingIds.size === 1 && existingIds.has(selfId);
+          if (!onlySelf) {
+            results.push({
+              id: q.id ?? null,
+              pass: false,
+              reason: "他の問題と正解が重複",
+            });
+            continue;
+          }
+        }
       }
       // 先に静的品質チェック
       const jaPrompt = japaneseRatio(q.prompt) >= 0.3;

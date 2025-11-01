@@ -11,6 +11,8 @@ export type VsQuestion = {
   id?: string;
   prompt: string;
   choices: string[];
+  answerIndex?: number;
+  explanation?: string | null;
 };
 
 export type VsLastAnswer = {
@@ -31,5 +33,5 @@ export type VsState = {
   players: VsPlayer[];
   question?: VsQuestion | null;
   lastAnswer?: VsLastAnswer | null;
+  history?: VsQuestion[];
 };
-
