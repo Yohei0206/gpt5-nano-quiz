@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist-tests",
+    "rootDir": "./",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "types": ["node"],
+    "declaration": false,
+    "emitDeclarationOnly": false
+  },
+  "include": ["lib/validation.ts", "lib/__tests__/**/*.ts"]
+}

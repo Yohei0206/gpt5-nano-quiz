@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "rm -rf dist-tests && tsc -p tsconfig.tests.json && node --test dist-tests/lib/__tests__/validation.test.js"
   },
   "dependencies": {
     "next": "14.2.5",
