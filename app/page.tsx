@@ -140,7 +140,7 @@ function HomeInner() {
               />
             </div>
             {catLoading && (
-              <div className="text-sm text-white/60">読込中...</div>
+              <div className="text-sm text-white/60">読み込み中...</div>
             )}
             {catError && <div className="text-sm text-red-400">{catError}</div>}
           </div>
@@ -159,7 +159,7 @@ function HomeInner() {
               />
             </div>
             {topLoading && (
-              <div className="text-sm text-white/60">サブジャンル一覧 読込中...</div>
+              <div className="text-sm text-white/60">サブジャンル一覧 読み込み中...</div>
             )}
             {topError && <div className="text-sm text-red-400">{topError}</div>}
           </div>

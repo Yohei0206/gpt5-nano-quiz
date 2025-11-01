@@ -722,7 +722,7 @@ export default function AdminPage() {
               }))}
             />
             {catLoading && (
-              <div className="text-xs text-white/60 mt-1">読込中...</div>
+              <div className="text-xs text-white/60 mt-1">読み込み中...</div>
             )}
             {catError && (
               <div className="text-xs text-red-400 mt-1">{catError}</div>
@@ -737,7 +737,7 @@ export default function AdminPage() {
             />
             {topicsLoading && (
               <div className="text-xs text-white/60 mt-1">
-                サブジャンル読込中...
+                サブジャンル読み込み中...
               </div>
             )}
             {topicsError && (
