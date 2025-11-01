@@ -131,3 +131,32 @@ export async function PATCH(
   });
 }
 
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id?: string } }
+) {
+  const adminToken = process.env.ADMIN_TOKEN;
+  if (adminToken) {
+    const provided = req.headers.get("x-admin-token");
+    if (provided !== adminToken) return json({ error: "Unauthorized" }, 401);
+  }
+
+  const idParam = params?.id;
+  if (!idParam) return json({ error: "Missing question id" }, 400);
+  const idValue = /^\d+$/.test(idParam) ? Number(idParam) : idParam;
+
+  const supabase = serverSupabaseService();
+  const { error, data } = await supabase
+    .from("questions")
+    .delete()
+    .eq("id", idValue)
+    .select("id");
+
+  if (error)
+    return json({ error: error.message || "Failed to delete question" }, 500);
+  if (!data || data.length === 0)
+    return json({ error: "Question not found" }, 404);
+
+  return json({ deleted: data.length }, 200);
+}
+

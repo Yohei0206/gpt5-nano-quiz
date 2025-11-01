@@ -88,6 +88,9 @@ export default function AdminReviewPage() {
   const [pendingEditQuestionId, setPendingEditQuestionId] = useState<
     string | null
   >(null);
+  const [deleteProcessingId, setDeleteProcessingId] = useState<
+    string | number | null
+  >(null);
 
   // Report filters and state
   const [reportSearchInput, setReportSearchInput] = useState("");
@@ -370,6 +373,47 @@ export default function AdminReviewPage() {
       setEditError((e as Error).message || "更新に失敗しました。");
     } finally {
       setEditSaving(false);
+    }
+  }
+
+  async function deleteQuestion(questionId: string | number) {
+    const idStr = String(questionId);
+    if (!idStr) {
+      setQuestionError("削除対象の問題IDが不正です。");
+      return;
+    }
+    if (typeof window !== "undefined") {
+      const ok = window.confirm("本当にこの問題を削除しますか？");
+      if (!ok) return;
+    }
+    setDeleteProcessingId(questionId);
+    setQuestionError(null);
+    setQuestionInfo(null);
+    try {
+      const res = await fetch(`/api/admin/questions/${idStr}`, {
+        method: "DELETE",
+        headers: {
+          ...(adminToken ? { "x-admin-token": adminToken } : {}),
+        },
+      });
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {}
+      if (!res.ok) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      setQuestionItems((prev) =>
+        prev.filter((item) => String(item.id) !== String(questionId))
+      );
+      setQuestionInfo("問題を削除しました。");
+      if (editingQuestionId === questionId) {
+        cancelQuestionEdit();
+      }
+    } catch (e) {
+      setQuestionError((e as Error).message || "削除に失敗しました。");
+    } finally {
+      setDeleteProcessingId(null);
     }
   }
 
@@ -739,18 +783,30 @@ export default function AdminReviewPage() {
                         {editError && (
                           <div className="text-sm text-red-400">{editError}</div>
                         )}
-                        <div className="flex justify-end gap-2">
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <button
+                            className="btn btn-outline btn-sm border-red-500/60 text-red-300 hover:bg-red-500/10"
+                            onClick={() => deleteQuestion(q.id)}
+                            disabled={
+                              deleteProcessingId === q.id || editSaving
+                            }
+                            type="button"
+                          >
+                            {deleteProcessingId === q.id ? "削除中..." : "削除"}
+                          </button>
                           <button
                             className="btn btn-ghost btn-sm"
                             onClick={cancelQuestionEdit}
-                            disabled={editSaving}
+                            disabled={editSaving || deleteProcessingId === q.id}
                           >
                             キャンセル
                           </button>
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={() => saveQuestionEdit(q.id)}
-                            disabled={editSaving}
+                            disabled={
+                              editSaving || deleteProcessingId === q.id
+                            }
                           >
                             {editSaving ? "保存中..." : "保存"}
                           </button>
