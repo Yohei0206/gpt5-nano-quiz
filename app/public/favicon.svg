@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <style>
+      .bg { fill: rgb(43,18,76); }
+      .fg { fill: rgb(255,255,255); font: 700 640px/1 "DejaVu Sans", "Arial Black", sans-serif; }
+      .acc { fill: rgb(255,210,0); }
+    </style>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="180" class="bg"/>
+  <text x="50%" y="56%" text-anchor="middle" class="fg">Q</text>
+  <!-- buzzer circle -->
+  <circle cx="240" cy="240" r="120" class="acc"/>
+  <!-- question dot -->
+  <circle cx="720" cy="720" r="40" class="acc"/>
+</svg>
