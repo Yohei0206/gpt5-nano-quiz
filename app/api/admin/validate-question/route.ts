@@ -361,10 +361,17 @@ export async function POST(req: NextRequest) {
       if (error) throw new Error(error.message);
       if (!data || data.length === 0) break;
       for (const row of data) {
-        const idx =
-          typeof (row as any)?.answer_index === "number"
-            ? (row as any).answer_index
-            : -1;
+        const rawIdx = (row as any)?.answer_index;
+        const idx = (() => {
+          if (typeof rawIdx === "number" && Number.isFinite(rawIdx)) {
+            return Math.trunc(rawIdx);
+          }
+          if (typeof rawIdx === "string" && rawIdx.trim()) {
+            const parsed = Number(rawIdx);
+            return Number.isFinite(parsed) ? Math.trunc(parsed) : -1;
+          }
+          return -1;
+        })();
         const rawChoices = (row as any)?.choices;
         const choices = Array.isArray(rawChoices) ? rawChoices : [];
         const answer = choices?.[idx];
