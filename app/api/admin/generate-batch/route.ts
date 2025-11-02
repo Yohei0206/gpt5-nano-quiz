@@ -669,11 +669,20 @@ export async function POST(req: NextRequest) {
       const prompt = norm(promptRaw).slice(0, 200);
       const baseChoices = (q.choices ?? q.options ?? []).map((c) => norm(c));
       const choices = dedupeChoices(baseChoices).slice(0, 4);
+      const answerIndex = Math.max(0, Math.min(3, toIndex({ ...q, choices })));
+      const answerTextCandidate = choices[answerIndex];
+      const answerTextNormalized =
+        typeof answerTextCandidate === "string"
+          ? answerTextCandidate.trim()
+          : "";
+      const answerText =
+        answerTextNormalized.length > 0 ? answerTextNormalized : undefined;
       return {
         id: norm(q.id ?? `q_${Date.now()}_${idx}`),
         prompt,
         choices,
-        answerIndex: Math.max(0, Math.min(3, toIndex({ ...q, choices }))),
+        answerIndex,
+        answerText,
         explanation: q.explanation
           ? norm(q.explanation).slice(0, 200)
           : undefined,
@@ -1275,18 +1284,35 @@ export async function POST(req: NextRequest) {
         return json({ error: rejectedInsertError.message }, 500);
       }
     }
-    const rows = verified.map((q) => ({
-      // id は送らず、DBの自動採番に任せる
-      prompt: q.prompt,
-      choices: q.choices,
-      answer_index: q.answerIndex,
-      explanation: q.explanation ?? null,
-      category: q.category,
-      subgenre: q.subgenre ?? null,
-      difficulty: q.difficulty,
-      source: q.source,
-      franchise: body.title?.trim() || null,
-    }));
+    const rows = verified.map((q) => {
+      const directAnswer =
+        typeof q.answerText === "string" && q.answerText.trim().length > 0
+          ? q.answerText.trim()
+          : null;
+      const choiceAnswer = (() => {
+        const choice = Array.isArray(q.choices)
+          ? q.choices[q.answerIndex]
+          : undefined;
+        if (typeof choice === "string" && choice.trim().length > 0) {
+          return choice.trim();
+        }
+        return null;
+      })();
+      const answerText = directAnswer || choiceAnswer;
+      return {
+        // id は送らず、DBの自動採番に任せる
+        prompt: q.prompt,
+        choices: q.choices,
+        answer_index: q.answerIndex,
+        answer_text: answerText,
+        explanation: q.explanation ?? null,
+        category: q.category,
+        subgenre: q.subgenre ?? null,
+        difficulty: q.difficulty,
+        source: q.source,
+        franchise: body.title?.trim() || null,
+      };
+    });
     // upsert begin logging removed; gpt_job_done will record counts
     const { data, error } = await supabase
       .from("questions")

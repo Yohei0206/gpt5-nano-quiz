@@ -8,6 +8,7 @@ const Item = z.object({
   prompt: z.string().min(5),
   choices: z.array(z.string().min(1)).length(4),
   answerIndex: z.number().int().min(0).max(3),
+  answerText: z.string().min(1).optional(),
   category: z.string().min(1),
 });
 

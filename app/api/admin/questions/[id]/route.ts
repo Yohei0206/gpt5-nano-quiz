@@ -15,6 +15,7 @@ const BodySchema = z.object({
   prompt: z.string().min(5).max(400),
   choices: z.array(z.string().min(1)).length(4),
   answerIndex: z.number().int().min(0).max(3),
+  answerText: z.string().min(1).optional(),
   explanation: z.string().max(500).optional().nullable(),
   category: z.string().min(1),
   difficulty: z.enum(["easy", "normal", "hard"]),
@@ -98,6 +99,18 @@ export async function PATCH(
     difficulty: body.difficulty,
     subgenre: body.subgenre ?? null,
   };
+  const directAnswer =
+    typeof body.answerText === "string" && body.answerText.trim().length > 0
+      ? body.answerText.trim()
+      : null;
+  const choiceAnswer = (() => {
+    const choice = body.choices?.[body.answerIndex];
+    if (typeof choice === "string" && choice.trim().length > 0) {
+      return choice.trim();
+    }
+    return null;
+  })();
+  payload.answer_text = directAnswer || choiceAnswer;
   if (body.source) payload.source = body.source;
 
   const { data, error } = await supabase
@@ -105,7 +118,7 @@ export async function PATCH(
     .update(payload)
     .eq("id", idValue)
     .select(
-      "id,prompt,choices,answer_index,explanation,category,difficulty,source,subgenre,created_at"
+      "id,prompt,choices,answer_index,answer_text,explanation,category,difficulty,source,subgenre,created_at"
     )
     .single();
 
@@ -121,6 +134,10 @@ export async function PATCH(
       choices: Array.isArray(data.choices) ? data.choices : [],
       answerIndex:
         typeof data.answer_index === "number" ? data.answer_index : null,
+      answerText:
+        typeof data.answer_text === "string" && data.answer_text.trim().length > 0
+          ? data.answer_text
+          : null,
       explanation: data.explanation ?? null,
       category: data.category,
       difficulty: data.difficulty,

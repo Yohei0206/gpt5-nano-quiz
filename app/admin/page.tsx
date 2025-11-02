@@ -30,6 +30,7 @@ const QuestionSchema = z.object({
   prompt: z.string().min(5).max(200),
   choices: z.array(z.string().min(1)).length(4),
   answerIndex: z.number().int().min(0).max(3),
+  answerText: z.string().min(1).optional(),
   explanation: z.string().max(300).optional().or(z.literal("")),
   category: z.string().min(1),
   subgenre: z.string().optional().or(z.literal("")),
@@ -364,11 +365,15 @@ export default function AdminPage() {
   function addItem() {
     setError(null);
     setInfo(null);
+    const trimmedChoices = choices.map((c) => c.trim());
     const q: Question = {
       id: genId(),
       prompt: prompt.trim(),
-      choices: choices.map((c) => c.trim()),
+      choices: trimmedChoices,
       answerIndex,
+      answerText: trimmedChoices[answerIndex]?.trim()
+        ? trimmedChoices[answerIndex]
+        : undefined,
       explanation: explanation.trim() || undefined,
       category,
       subgenre: subgenre || undefined,

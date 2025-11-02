@@ -33,7 +33,9 @@ export async function POST(req: NextRequest) {
 
   let query = supabase
     .from("questions")
-    .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source")
+    .select(
+      "id,prompt,choices,answer_index,answer_text,explanation,category,subgenre,difficulty,source"
+    )
     .eq("difficulty", body.difficulty);
   if (hasCategory) query = query.eq("category", body.category!.trim());
   if (hasTitle) query = query.eq("franchise", String((body as any).title).trim());
@@ -47,7 +49,9 @@ export async function POST(req: NextRequest) {
     if (hasCategory || hasTitle) {
       let q1 = supabase
         .from("questions")
-        .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source")
+        .select(
+          "id,prompt,choices,answer_index,answer_text,explanation,category,subgenre,difficulty,source"
+        )
         .limit(200);
       if (hasCategory) q1 = q1.eq("category", body.category!.trim());
       if (hasTitle) q1 = q1.eq("franchise", String((body as any).title).trim());
@@ -58,7 +62,9 @@ export async function POST(req: NextRequest) {
     if (pool.length < body.count && !hasTitle) {
       const { data: more2 } = await supabase
         .from("questions")
-        .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source")
+        .select(
+          "id,prompt,choices,answer_index,answer_text,explanation,category,subgenre,difficulty,source"
+        )
         .limit(500);
       if (more2) pool = uniqueById([...pool, ...more2]);
     }
@@ -69,6 +75,10 @@ export async function POST(req: NextRequest) {
     prompt: r.prompt,
     choices: r.choices as string[],
     answerIndex: r.answer_index as number,
+    answerText:
+      typeof r.answer_text === "string" && r.answer_text.trim().length > 0
+        ? r.answer_text
+        : undefined,
     explanation: r.explanation ?? undefined,
     category: r.category,
     subgenre: r.subgenre ?? undefined,

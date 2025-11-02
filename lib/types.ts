@@ -5,6 +5,7 @@ export interface Question {
   prompt: string;
   choices: string[]; // length: 4
   answerIndex: number; // 0-3
+  answerText?: string | null;
   explanation?: string;
   category: string;
   subgenre?: string;
