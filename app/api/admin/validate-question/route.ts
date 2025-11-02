@@ -14,6 +14,7 @@ const Item = z.object({
   prompt: z.string().min(5),
   choices: z.array(z.string().min(1)).length(4),
   answerIndex: z.number().int().min(0).max(3),
+  answerText: z.string().min(1).optional(),
   category: z.string().min(1),
 });
 
@@ -355,26 +356,36 @@ export async function POST(req: NextRequest) {
     while (true) {
       const { data, error } = await client
         .from("questions")
-        .select("id,choices,answer_index")
+        .select("id,answer_text,choices,answer_index")
         .order("id", { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
       if (error) throw new Error(error.message);
       if (!data || data.length === 0) break;
       for (const row of data) {
-        const rawIdx = (row as any)?.answer_index;
-        const idx = (() => {
-          if (typeof rawIdx === "number" && Number.isFinite(rawIdx)) {
-            return Math.trunc(rawIdx);
+        const rawAnswerText = (row as any)?.answer_text;
+        let answer: string | null = null;
+        if (typeof rawAnswerText === "string" && rawAnswerText.trim().length > 0) {
+          answer = rawAnswerText.trim();
+        }
+        if (!answer) {
+          const rawIdx = (row as any)?.answer_index;
+          const idx = (() => {
+            if (typeof rawIdx === "number" && Number.isFinite(rawIdx)) {
+              return Math.trunc(rawIdx);
+            }
+            if (typeof rawIdx === "string" && rawIdx.trim()) {
+              const parsed = Number(rawIdx);
+              return Number.isFinite(parsed) ? Math.trunc(parsed) : -1;
+            }
+            return -1;
+          })();
+          const rawChoices = (row as any)?.choices;
+          const choices = Array.isArray(rawChoices) ? rawChoices : [];
+          const candidate = choices?.[idx];
+          if (typeof candidate === "string" && candidate.trim().length > 0) {
+            answer = candidate.trim();
           }
-          if (typeof rawIdx === "string" && rawIdx.trim()) {
-            const parsed = Number(rawIdx);
-            return Number.isFinite(parsed) ? Math.trunc(parsed) : -1;
-          }
-          return -1;
-        })();
-        const rawChoices = (row as any)?.choices;
-        const choices = Array.isArray(rawChoices) ? rawChoices : [];
-        const answer = choices?.[idx];
+        }
         if (typeof answer !== "string" || !answer) continue;
         const key = normalizeForChoiceCompare(answer);
         if (!key) continue;
@@ -391,9 +402,18 @@ export async function POST(req: NextRequest) {
   }
 
   const normalizedAnswers = items.map((q) => {
-    const choice = q.choices?.[q.answerIndex];
-    return typeof choice === "string" && choice.length > 0
-      ? normalizeForChoiceCompare(choice)
+    const baseAnswer = (() => {
+      if (typeof q.answerText === "string" && q.answerText.trim().length > 0) {
+        return q.answerText.trim();
+      }
+      const choice = q.choices?.[q.answerIndex];
+      if (typeof choice === "string" && choice.trim().length > 0) {
+        return choice.trim();
+      }
+      return null;
+    })();
+    return typeof baseAnswer === "string" && baseAnswer.length > 0
+      ? normalizeForChoiceCompare(baseAnswer)
       : null;
   });
   const duplicateAnswerKeys = (() => {

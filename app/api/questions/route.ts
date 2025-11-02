@@ -14,7 +14,10 @@ export async function GET(req: NextRequest) {
 
   let query = supabase
     .from("questions")
-    .select("id,prompt,choices,answer_index,explanation,category,subgenre,difficulty,source,created_at", { count: "exact" })
+    .select(
+      "id,prompt,choices,answer_index,answer_text,explanation,category,subgenre,difficulty,source,created_at",
+      { count: "exact" }
+    )
     .order("created_at", { ascending: false });
 
   if (category) query = query.eq("category", category);
@@ -32,6 +35,10 @@ export async function GET(req: NextRequest) {
     prompt: r.prompt,
     choices: r.choices as string[],
     answerIndex: r.answer_index as number,
+    answerText:
+      typeof r.answer_text === "string" && r.answer_text.trim().length > 0
+        ? r.answer_text
+        : undefined,
     explanation: r.explanation ?? undefined,
     category: r.category,
     subgenre: r.subgenre ?? undefined,

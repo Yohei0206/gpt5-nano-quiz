@@ -10,6 +10,7 @@ type AdminQuestion = {
   prompt: string;
   choices: string[];
   answerIndex: number | null;
+  answerText: string | null;
   explanation: string | null;
   category: string;
   difficulty: string;
@@ -308,6 +309,7 @@ export default function AdminReviewPage() {
       prompt: trimmedPrompt,
       choices: trimmedChoices,
       answerIndex: editForm.answerIndex,
+      answerText: trimmedChoices[editForm.answerIndex],
       explanation: editForm.explanation.trim()
         ? editForm.explanation.trim()
         : null,
@@ -365,6 +367,10 @@ export default function AdminReviewPage() {
               typeof updated.answerIndex === "number"
                 ? updated.answerIndex
                 : null,
+            answerText:
+              updated.answerText === undefined
+                ? item.answerText
+                : updated.answerText,
             explanation:
               updated.explanation === undefined
                 ? item.explanation

@@ -4,6 +4,7 @@ create table if not exists public.questions (
   prompt text not null,
   choices jsonb not null,
   answer_index int not null check (answer_index between 0 and 3),
+  answer_text text,
   explanation text,
   category text not null,
   subgenre text,
@@ -21,6 +22,7 @@ create index if not exists idx_questions_category on public.questions (category)
 create index if not exists idx_questions_difficulty on public.questions (difficulty);
 -- Ensure 'hash' column exists for existing installations
 alter table public.questions add column if not exists hash text;
+alter table public.questions add column if not exists answer_text text;
 create unique index if not exists uq_questions_hash on public.questions (hash) where hash is not null;
 
 -- Optional: RLS

@@ -9,6 +9,7 @@ const Item = z.object({
   prompt: z.string().min(5).max(200),
   choices: z.array(z.string().min(1)).length(4),
   answerIndex: z.number().int().min(0).max(3),
+  answerText: z.string().min(1).optional(),
   explanation: z.string().max(300).optional(),
   category: z.string().min(1),
   subgenre: z.string().optional(),
@@ -86,17 +87,32 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = serverSupabaseService();
-  const rows = body.items.map((q) => ({
-    // id は送らず、DB の identity に任せる
-    prompt: q.prompt,
-    choices: q.choices,
-    answer_index: q.answerIndex,
-    explanation: q.explanation ?? null,
-    category: normalizeCategory(q.category),
-    subgenre: q.subgenre ?? null,
-    difficulty: q.difficulty,
-    source: q.source,
-  }));
+  const rows = body.items.map((q) => {
+    const directAnswer =
+      typeof q.answerText === "string" && q.answerText.trim().length > 0
+        ? q.answerText.trim()
+        : null;
+    const choiceAnswer = (() => {
+      const choice = q.choices?.[q.answerIndex];
+      if (typeof choice === "string" && choice.trim().length > 0) {
+        return choice.trim();
+      }
+      return null;
+    })();
+    const answerText = directAnswer || choiceAnswer;
+    return {
+      // id は送らず、DB の identity に任せる
+      prompt: q.prompt,
+      choices: q.choices,
+      answer_index: q.answerIndex,
+      answer_text: answerText,
+      explanation: q.explanation ?? null,
+      category: normalizeCategory(q.category),
+      subgenre: q.subgenre ?? null,
+      difficulty: q.difficulty,
+      source: q.source,
+    };
+  });
   try {
     console.log("[admin-questions][POST] upsert begin: count=", rows.length);
   } catch {}
@@ -156,7 +172,7 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from("questions")
     .select(
-      "id,prompt,choices,answer_index,explanation,category,difficulty,source,subgenre,created_at",
+      "id,prompt,choices,answer_index,answer_text,explanation,category,difficulty,source,subgenre,created_at",
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
@@ -196,6 +212,10 @@ export async function GET(req: NextRequest) {
     choices: Array.isArray(row.choices) ? row.choices : [],
     answerIndex:
       typeof row.answer_index === "number" ? row.answer_index : null,
+    answerText:
+      typeof row.answer_text === "string" && row.answer_text.trim().length > 0
+        ? row.answer_text
+        : null,
     explanation: row.explanation ?? null,
     category: row.category,
     difficulty: row.difficulty,
