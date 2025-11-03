@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { serverSupabaseService, serverSupabaseAnon } from "@/lib/supabase";
+import { normalizeForChoiceCompare } from "@/lib/validation";
 
 export const runtime = "nodejs"; // サービスキー利用のためEdgeは避ける
 
@@ -42,6 +43,52 @@ export async function POST(req: NextRequest) {
       { error: "Invalid request", details: (e as Error).message },
       400
     );
+  }
+
+  const validationErrors: string[] = [];
+  const PROHIBITED = [
+    "以上すべて",
+    "上記すべて",
+    "どれでもない",
+    "none of the above",
+    "all of the above",
+  ];
+  body.items.forEach((item, index) => {
+    const trimmedPrompt = item.prompt.trim();
+    if (PROHIBITED.some((p) => trimmedPrompt.includes(p))) {
+      validationErrors.push(
+        `${index + 1}件目: 問題文に使用できない表現が含まれています`
+      );
+    }
+    const seenChoices = new Set<string>();
+    const rawChoices = item.choices.map((choice) => choice.trim());
+    rawChoices.forEach((choice, choiceIndex) => {
+      const normalized = normalizeForChoiceCompare(choice);
+      if (seenChoices.has(normalized)) {
+        validationErrors.push(
+          `${index + 1}件目: 選択肢 ${choiceIndex + 1} が他の選択肢と重複しています`
+        );
+      } else {
+        seenChoices.add(normalized);
+      }
+      if (PROHIBITED.some((p) => choice.includes(p))) {
+        validationErrors.push(
+          `${index + 1}件目: 選択肢 ${choiceIndex + 1} に使用できない表現が含まれています`
+        );
+      }
+    });
+    if (
+      !rawChoices[item.answerIndex] ||
+      rawChoices[item.answerIndex].trim().length === 0
+    ) {
+      validationErrors.push(
+        `${index + 1}件目: 正解インデックスに対応する選択肢が空です`
+      );
+    }
+  });
+
+  if (validationErrors.length > 0) {
+    return json({ error: "Validation failed", details: validationErrors }, 400);
   }
 
   // カテゴリーをスラッグへ正規化（FK: categories.slug）
@@ -88,12 +135,13 @@ export async function POST(req: NextRequest) {
 
   const supabase = serverSupabaseService();
   const rows = body.items.map((q) => {
+    const trimmedChoices = q.choices.map((choice) => choice.trim());
     const directAnswer =
       typeof q.answerText === "string" && q.answerText.trim().length > 0
         ? q.answerText.trim()
         : null;
     const choiceAnswer = (() => {
-      const choice = q.choices?.[q.answerIndex];
+      const choice = trimmedChoices?.[q.answerIndex];
       if (typeof choice === "string" && choice.trim().length > 0) {
         return choice.trim();
       }
@@ -102,8 +150,8 @@ export async function POST(req: NextRequest) {
     const answerText = directAnswer || choiceAnswer;
     return {
       // id は送らず、DB の identity に任せる
-      prompt: q.prompt,
-      choices: q.choices,
+      prompt: q.prompt.trim(),
+      choices: trimmedChoices,
       answer_index: q.answerIndex,
       answer_text: answerText,
       explanation: q.explanation ?? null,
